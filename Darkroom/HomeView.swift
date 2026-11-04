@@ -62,6 +62,8 @@ struct HomeView: View {
     @State private var walk: WalkModel?
     @State private var confirmSignOut = false
     @State private var editing = false
+    @State private var settings = false
+    @State private var gallery = false
 
     private var open: [PrintDraft] {
         store.drafts.values.filter { !$0.finished }.sorted { $0.updatedAt > $1.updatedAt }
@@ -74,9 +76,15 @@ struct HomeView: View {
                 Spacer()
                 Menu {
                     Button("Refresh lists", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
+                    Button("Prints", systemImage: "photo.on.rectangle") { gallery = true }
                     Button("Edit walk-throughs", systemImage: "list.number") { editing = true }
+                    Button("Settings", systemImage: "gearshape") { settings = true }
                     Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { confirmSignOut = true }
-                } label: { Image(systemName: "ellipsis.circle").font(.title2).foregroundStyle(Theme.red) }
+                } label: {
+                    Image(systemName: "line.3.horizontal").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
+                        .frame(width: 48, height: 48)
+                }
+                .accessibilityLabel("Menu")
             }
             statusLine
 
@@ -116,6 +124,8 @@ struct HomeView: View {
         #endif
         .fullScreenCover(item: $walk) { m in WalkView(model: m) }
         .sheet(isPresented: $editing) { EditWalksView() }
+        .sheet(isPresented: $settings) { SettingsView() }
+        .sheet(isPresented: $gallery) { GalleryView() }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { Task { await store.signOut() } }
         } message: {

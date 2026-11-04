@@ -15,7 +15,7 @@ struct DarkroomApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(Look.shared.darkroom ? .dark : .light)
                 .task {
                     _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
                     await store.refresh()
@@ -36,7 +36,7 @@ struct RootView: View {
     @Environment(AppStore.self) private var store
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Theme.bg.ignoresSafeArea()
             if store.signedIn { HomeView() } else { SignInView() }
         }
     }

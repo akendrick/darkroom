@@ -109,10 +109,24 @@ struct EditWalksView: View {
     @Environment(\.dismiss) private var dismiss
     /// Opens straight on this one (the walk-through in use), if set.
     var startOn: Int?
+    /// Shown inside another screen's navigation (Settings) rather than as its own sheet.
+    var embedded = false
     @State private var path = NavigationPath()
 
     var body: some View {
-        NavigationStack(path: $path) {
+        if embedded { list }
+        else {
+            NavigationStack(path: $path) {
+                list
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                    .onAppear { if let s = startOn, path.isEmpty, store.rawPreset(s) != nil { path.append(s) } }
+            }
+            .tint(Theme.red)
+            .foregroundStyle(Theme.red)
+        }
+    }
+
+    private var list: some View {
             List {
                 ForEach(store.snapshot?.photoTypes ?? []) { t in
                     let ps = (store.snapshot?.presets ?? []).filter { $0.photoTypeId == t.id }
@@ -132,18 +146,12 @@ struct EditWalksView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+            .background(Theme.bg)
             .navigationTitle("Walk-throughs")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .navigationDestination(for: Int.self) { id in
                 PresetEditView(presetId: id)
             }
-            .onAppear { if let s = startOn, path.isEmpty, store.rawPreset(s) != nil { path.append(s) } }
-        }
-        .tint(Theme.red)
-        .foregroundStyle(Theme.red)
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -175,7 +183,7 @@ struct PresetStepsView: View {
                 TextField("Name", text: $edit.name).font(Theme.body.weight(.bold))
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 Toggle("Default for this process", isOn: $edit.isDefault).font(Theme.small)
-                    .listRowBackground(Color.black)
+                    .listRowBackground(Theme.bg)
             }
             Section {
                 ForEach(edit.steps) { s in
@@ -194,18 +202,18 @@ struct PresetStepsView: View {
                 .onMove { edit.steps.move(fromOffsets: $0, toOffset: $1) }
                 .onDelete { edit.steps.remove(atOffsets: $0) }
                 Button("+ Add step") { edit.steps.append(StepEdit()) }
-                    .font(Theme.body.weight(.bold)).listRowBackground(Color.black)
+                    .font(Theme.body.weight(.bold)).listRowBackground(Theme.bg)
             } header: {
                 Text("STEPS · hold and drag to reorder · swipe left to remove").font(Theme.label).foregroundStyle(Theme.bright)
             } footer: {
                 Text("A step used by earlier prints is kept with them when removed here.").font(Theme.small)
             }
             if let e = edit.error {
-                Text(e).font(Theme.small).listRowBackground(Color.black)
+                Text(e).font(Theme.small).listRowBackground(Theme.bg)
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.black)
+        .background(Theme.bg)
         .navigationTitle(edit.name)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(edit.changed)
@@ -325,7 +333,7 @@ struct StepForm: View {
             }
             .padding(18)
         }
-        .background(Color.black)
+        .background(Theme.bg)
         .navigationTitle(step.name)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: step.kind) { _, k in if k != "select" { step.selectWhat = nil } }

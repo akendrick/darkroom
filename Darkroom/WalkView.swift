@@ -26,7 +26,7 @@ struct WalkView: View {
                 .lineLimit(2).padding(.horizontal, 16).padding(.top, 4)
             footer
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Theme.bg.ignoresSafeArea())
         .foregroundStyle(Theme.red)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }       // screen stays on
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
@@ -324,7 +324,7 @@ struct TempWheel: View {
             .background(Theme.box, in: .rect(cornerRadius: 10))
         }
         .padding(18)
-        .presentationBackground(.black)
+        .presentationBackground(Theme.bg)
         .onAppear { if temp == nil { temp = start ?? 20 } }
     }
 }
@@ -335,14 +335,13 @@ struct TempWheel: View {
 struct WalkMenu: View {
     @Bindable var model: WalkModel
     @State private var editing = false
+    @State private var settings = false
     var body: some View {
         Menu {
             Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
             Button("Edit walk-through steps", systemImage: "list.number") { editing = true }
-            Section("Coming") {
-                Button("Settings", systemImage: "gearshape") {}.disabled(true)
-            }
+            Button("Settings", systemImage: "gearshape") { settings = true }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
@@ -350,6 +349,7 @@ struct WalkMenu: View {
         }
         .accessibilityLabel("Menu")
         .sheet(isPresented: $editing) { EditWalksView(startOn: model.draft.presetId) }
+        .sheet(isPresented: $settings) { SettingsView() }
     }
 }
 

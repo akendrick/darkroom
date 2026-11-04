@@ -1,13 +1,37 @@
 import SwiftUI
 
-/// Darkroom-safe: red on black, as on the web walk-through.
+/// Which look is on. Observed, so every view using a Theme colour redraws
+/// when it changes, without closing what's open.
+@MainActor @Observable
+final class Look {
+    static let shared = Look()
+    private static let key = "darkroomMode"
+    var darkroom = UserDefaults.standard.bool(forKey: key) {
+        didSet { UserDefaults.standard.set(darkroom, forKey: Self.key) }
+    }
+}
+
+/// Two looks: everyday (dark ink on paper) and darkroom mode (red on black,
+/// safe under the safelight), switched in Settings.
+@MainActor
 enum Theme {
-    static let red = Color(red: 1, green: 0.165, blue: 0.102)        // #ff2a1a
-    static let dim = Color(red: 1, green: 0.165, blue: 0.102).opacity(0.55)
-    static let line = Color(red: 1, green: 0.165, blue: 0.102).opacity(0.45)
-    static let fill = Color(red: 0.23, green: 0.02, blue: 0)          // #3a0600, a chosen item
-    static let box = Color(red: 0.7, green: 0.1, blue: 0.05)          // #b31a0d, fields: black text on it
-    static let bright = Color(red: 1, green: 0.42, blue: 0.34)        // #ff6b57, field labels
+    static var darkroom: Bool { Look.shared.darkroom }
+
+    /// The main colour: text, headings, outlines.
+    static var red: Color { darkroom ? Color(red: 1, green: 0.165, blue: 0.102)       // #ff2a1a
+                                     : Color(red: 0.75, green: 0.11, blue: 0.06) }    // #bf1c0f
+    static var dim: Color { darkroom ? red.opacity(0.55) : Color(red: 0.1, green: 0.1, blue: 0.08).opacity(0.6) }
+    static var line: Color { red.opacity(0.45) }
+    /// A chosen item.
+    static var fill: Color { darkroom ? Color(red: 0.23, green: 0.02, blue: 0) : Color(red: 0.98, green: 0.88, blue: 0.86) }
+    /// Fields: black text on it.
+    static var box: Color { darkroom ? Color(red: 0.7, green: 0.1, blue: 0.05) : Color(red: 0.93, green: 0.91, blue: 0.89) }
+    /// Field labels.
+    static var bright: Color { darkroom ? Color(red: 1, green: 0.42, blue: 0.34) : Color(red: 0.45, green: 0.08, blue: 0.04) }
+    /// Page background.
+    static var bg: Color { darkroom ? .black : Color(red: 0.99, green: 0.98, blue: 0.97) }
+    /// Text on the big red buttons.
+    static var onRed: Color { darkroom ? .black : .white }
 
     static func display(_ size: CGFloat) -> Font { .system(size: size, weight: .heavy).width(.condensed) }
     static let body = Font.system(.body, design: .monospaced)
@@ -24,7 +48,7 @@ struct WalkButtonStyle: ButtonStyle {
             .foregroundStyle(Theme.red)
             .padding(.horizontal, 16).padding(.vertical, 14)
             .frame(minHeight: 54)
-            .background(on || configuration.isPressed ? Theme.fill : .black, in: .rect(cornerRadius: 10))
+            .background(on || configuration.isPressed ? Theme.fill : Theme.bg, in: .rect(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red, lineWidth: 2))
     }
 }
@@ -36,7 +60,7 @@ struct NextButtonStyle: ButtonStyle {
             .font(Theme.display(34))
             .tracking(2)
             .lineLimit(1).minimumScaleFactor(0.6)
-            .foregroundStyle(.black)
+            .foregroundStyle(Theme.onRed)
             .frame(maxWidth: .infinity, minHeight: 78)
             .background(Theme.red.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 12))
     }
