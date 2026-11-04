@@ -35,7 +35,7 @@ struct WalkView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            Text(model.header.uppercased()).font(Theme.label).tracking(1.5).foregroundStyle(Theme.dim)
+            Text(model.header.uppercased()).font(Theme.display(26)).foregroundStyle(Theme.red)
                 .lineLimit(1).truncationMode(.tail)
             Spacer()
             PhotoButton(model: model)
@@ -160,16 +160,12 @@ struct SelectPage: View {
 struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
-    @State private var manual = ""
     @State private var temp = ""
     @State private var ph = ""
-    @State private var badTime = false
-    @FocusState private var timeFocused: Bool
 
     init(model: WalkModel, step: Step) {
         self.model = model; self.step = step
         let r = model.rec
-        _manual = State(initialValue: r.manual.map(Duration.format) ?? "")
         _temp = State(initialValue: r.temp.map { $0.formatted() } ?? "")
         _ph = State(initialValue: r.ph.map { $0.formatted() } ?? "")
     }
@@ -181,33 +177,39 @@ struct StepPage: View {
             let meta = [step.tray.map { "Tray \($0)" }, step.defaultTemp.map { "\($0.formatted()) °C" }].compactMap { $0 }
             if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(Theme.small) }
 
+            // The time is the timer: tap it to start or pause.
             TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
-                let d = model.rec.timer.display(at: ctx.date)
+                let r = model.rec.timer
+                let d = r.display(at: ctx.date)
                 Text(d.text)
-                    .font(Theme.display(d.text.count > 5 ? 96 : 120)).monospacedDigit()
-                    .lineLimit(1).minimumScaleFactor(0.4)
+                    .font(.system(size: 220, weight: .heavy).width(.compressed)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.3)
                     .opacity(d.over && Int(ctx.date.timeIntervalSince1970 * 2) % 2 == 0 ? 0.35 : 1)
-                    .frame(maxWidth: .infinity)
-                    .onTapGesture { timeFocused = true }
+                    .frame(maxWidth: .infinity, minHeight: 170)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.startPause() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(r.isRunning ? "Pause timer" : "Start timer")
+            }
+            .overlay(alignment: .bottomTrailing) {
+                // Back to zero and counting again, as on the Watch.
+                Button { model.reset(); model.startPause() } label: {
+                    Image(systemName: "arrow.counterclockwise.circle").font(.system(size: 38, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.red)
+                .accessibilityLabel("Restart timer")
+                .offset(y: 24)
             }
             if step.minSeconds != nil || step.maxSeconds != nil {
                 Text("range \(step.minSeconds.map(Duration.format) ?? "")–\(step.maxSeconds.map(Duration.format) ?? "")")
                     .font(Theme.small).foregroundStyle(Theme.dim).frame(maxWidth: .infinity)
             }
-            HStack(spacing: 10) {
-                let r = model.rec.timer
-                Button(r.isRunning ? "Pause" : (r.hasRun ? "Resume" : "Start")) { model.startPause() }
-                    .buttonStyle(WalkButtonStyle(on: r.isRunning))
-                Button("Reset") { model.reset() }.buttonStyle(WalkButtonStyle())
-            }
-            .frame(maxWidth: .infinity)
 
+            Field(label: "Time") {
+                TimeWheels(seconds: model.rec.manual ?? step.defaultSeconds ?? 0) { model.setManual(seconds: $0) }
+                    .padding(.horizontal, -12).padding(.vertical, -10)
+            }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
-                Field(label: "Time (10 · 90s · 2:30 · 2h)") {
-                    TextField(step.defaultSeconds.map(Duration.format) ?? "—", text: $manual)
-                        .keyboardType(.numbersAndPunctuation).focused($timeFocused)
-                        .onChange(of: manual) { _, v in badTime = !model.setManual(v) }
-                }
                 if step.asksTemp || step.defaultTemp != nil {
                     Field(label: "Temp °C") {
                         TextField("", text: $temp).keyboardType(.decimalPad)
@@ -229,7 +231,6 @@ struct StepPage: View {
                     }
                 }
             }
-            if badTime { Text("Not a time — try 10, 90s, 2:30 or 2h").font(Theme.small) }
 
             let batches = model.batches(for: step)
             if !batches.isEmpty {
@@ -322,8 +323,7 @@ struct PhotoButton: View {
 
     private func save(_ img: UIImage) {
         guard let jpeg = img.shrunk(to: 1800).jpegData(compressionQuality: 0.9) else { return }
-        model.store.attachImage(jpeg, to: model.draft.clientId)
-        if let d = model.store.drafts[model.draft.clientId] { model.draft = d }
+        model.store.attachImage(jpeg, to: model.clientId)
         model.status = model.store.online ? "Photo saved to this print" : "Photo kept on this phone — sends when online"
     }
 }

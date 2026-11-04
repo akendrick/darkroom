@@ -10,7 +10,14 @@ import UserNotifications
 @MainActor @Observable
 final class WalkModel {
     let store: AppStore
-    var draft: PrintDraft { didSet { store.update(draft); pushWatch() } }
+    let clientId: String
+    /// The print lives in the store, which also sends it and fills in the
+    /// server's id; this is only a fallback once the store has let it go.
+    private var last: PrintDraft
+    var draft: PrintDraft {
+        get { store.drafts[clientId] ?? last }
+        set { last = newValue; store.update(newValue); pushWatch() }
+    }
     var status: String?
     private var alarmTask: Task<Void, Never>?
 
@@ -18,7 +25,9 @@ final class WalkModel {
 
     init(store: AppStore, draft: PrintDraft) {
         self.store = store
-        self.draft = draft
+        self.clientId = draft.clientId
+        self.last = draft
+        if store.drafts[clientId] == nil { store.update(draft) }
         if self.draft.page >= pages.count { self.draft.page = pages.count - 1 }
         watchAlarm()
         pushWatch()
@@ -33,7 +42,7 @@ final class WalkModel {
 
     var header: String {
         guard let n = stepPages.firstIndex(of: page) else { return draft.title.isEmpty ? "Walk-through" : draft.title }
-        return "Step \(n + 1) of \(stepPages.count)" + (page.layer > 0 && multiLayer ? " · Layer \(page.layer)" : "")
+        return "Step \(n + 1)/\(stepPages.count)" + (page.layer > 0 && multiLayer ? " · L\(page.layer)" : "")
     }
 
     // MARK: The current step's record
@@ -113,17 +122,22 @@ final class WalkModel {
 
     /// Typed time. Returns false if it isn't a time.
     @discardableResult func setManual(_ text: String) -> Bool {
-        var r = rec
         switch Duration.parse(text) {
-        case .empty: r.manual = nil
-        case .seconds(let s): r.manual = s
+        case .empty: setManual(seconds: nil)
+        case .seconds(let s): setManual(seconds: s)
         case .invalid: return false
         }
+        return true
+    }
+
+    /// A time from the scroll wheels; nil (or zero) goes back to the step's own.
+    func setManual(seconds: Int?) {
+        var r = rec
+        r.manual = seconds == 0 ? nil : seconds
         r.timer.target = r.manual ?? page.step?.defaultSeconds
         r.alarmed = false
         rec = r
         scheduleAlarm()
-        return true
     }
 
     /// Rings once when the running countdown passes zero, while the app is open.
@@ -170,8 +184,7 @@ final class WalkModel {
         if page == .finish { finish(); return }
         var d = draft
         d.page = min(pages.count - 1, d.page + 1)
-        store.update(d, send: true)
-        draft = d
+        send(d)
         scheduleAlarm()
     }
 
@@ -185,17 +198,16 @@ final class WalkModel {
         var d = draft
         d.recs[key] = StepRecord(startedAt: Clock.stamp(), skipped: true, done: true)
         d.page = min(pages.count - 1, d.page + 1)
-        store.update(d, send: true)
-        draft = d
+        send(d)
         scheduleAlarm()
     }
 
     /// Saves and leaves; the print stays "in progress" to carry on later.
     func saveAndExit() {
         if draft.photoId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
-            store.drafts[draft.clientId] = nil; store.save()
+            store.drafts[clientId] = nil; store.save()
         } else {
-            store.update(draft, send: true)
+            send(draft)
         }
         close()
     }
@@ -203,8 +215,15 @@ final class WalkModel {
     func finish() {
         var d = draft
         d.finished = true
-        store.update(d, send: true)
+        send(d)
         close()
+    }
+
+    /// Saves and marks the print for sending (now, or when there's a connection).
+    private func send(_ d: PrintDraft) {
+        last = d
+        store.update(d, send: true)
+        pushWatch()
     }
 
     private func close() {
@@ -228,12 +247,16 @@ final class WalkModel {
         // A choice still to make on the phone: the Watch's Next waits for it.
         let canNext = !(s?.isSelect == true && s?.selectWhat.map { chosen($0) == nil } == true)
         PhoneWatch.shared.send(WatchScreen(
-            active: true, title: title, detail: [header, meta].filter { !$0.isEmpty }.joined(separator: " · "),
+            active: true, title: title, step: stepPages.contains(page) ? header : "", detail: meta,
             hasTimer: s.map { !$0.isSelect } ?? false, timer: rec.timer,
-            canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", sentAt: .now))
+            canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", pageKey: pageKey, sentAt: .now))
     }
 
-    func handle(_ cmd: WatchCommand) {
+    var pageKey: String { "\(clientId)#\(draft.page)" }
+
+    func handle(_ cmd: WatchCommand, on pressedOn: String) {
+        // Pressed on a page the phone has already left: show the Watch where we are.
+        guard pressedOn == pageKey else { pushWatch(); return }
         switch cmd {
         case .next:
             if let s = page.step, s.isSelect, let w = s.selectWhat, chosen(w) == nil { status = "Choose on the phone first"; pushWatch(); return }

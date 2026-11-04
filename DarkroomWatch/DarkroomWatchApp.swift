@@ -34,7 +34,8 @@ final class WatchLink: NSObject, WCSessionDelegate {
         case .next: break
         }
         if cmd != .next { apply(s) }
-        let msg: [String: Any] = [WatchKeys.command: cmd.rawValue, WatchKeys.sentAt: Date()]
+        let msg: [String: Any] = [WatchKeys.command: cmd.rawValue, WatchKeys.sentAt: Date(),
+                                  WatchKeys.id: UUID().uuidString, WatchKeys.pageKey: screen.pageKey]
         let wc = WCSession.default
         if wc.isReachable { wc.sendMessage(msg, replyHandler: nil) { _ in wc.transferUserInfo(msg) } }
         else { wc.transferUserInfo(msg) }
@@ -93,38 +94,56 @@ struct TimerScreen: View {
 
     var body: some View {
         let s = link.screen
-        VStack(spacing: 4) {
-            Text(s.title.uppercased()).font(.system(.headline).width(.condensed)).lineLimit(2).minimumScaleFactor(0.6)
-            Text(s.detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(red.opacity(0.6)).lineLimit(1)
+        VStack(spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(s.title.uppercased()).font(.system(size: 15, weight: .bold).width(.condensed)).lineLimit(1).minimumScaleFactor(0.6)
+                if !s.step.isEmpty {
+                    Text(s.step.uppercased()).font(.system(size: 17, weight: .heavy).width(.compressed)).monospacedDigit()
+                }
+            }
+            if !s.detail.isEmpty { Text(s.detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(red.opacity(0.6))
+                .lineLimit(s.active ? 1 : 3).multilineTextAlignment(.center).minimumScaleFactor(0.8) }
             if s.hasTimer {
+                // The time fills the screen. Tap it to start or pause.
                 TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
                     let d = s.timer.display(at: ctx.date)
                     Text(d.text)
-                        .font(.system(size: 52, weight: .heavy).width(.condensed)).monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.5)
+                        .font(.system(size: 200, weight: .heavy).width(.compressed)).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.2)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(d.over && Int(ctx.date.timeIntervalSince1970 * 2) % 2 == 0 ? 0.4 : 1)
+                        .contentShape(Rectangle())
+                        .onTapGesture { link.press(.pause) }
                         .onChange(of: ctx.date) { _, now in link.tick(now) }
                 }
             } else if s.active {
-                Text(s.canNext ? "" : "Choose on the iPhone").font(.footnote).foregroundStyle(red.opacity(0.6)).frame(maxHeight: .infinity)
+                Text(s.canNext ? "" : "Choose on the iPhone").font(.footnote).foregroundStyle(red.opacity(0.6))
+                    .frame(maxHeight: .infinity)
             } else {
                 Spacer()
             }
             if s.active {
-                if s.hasTimer {
-                    HStack(spacing: 6) {
-                        Button(s.timer.isRunning ? "Pause" : "Start") { link.press(.pause) }
-                        Button("Restart") { link.press(.restart) }
+                HStack(spacing: 6) {
+                    if s.hasTimer {
+                        Button { link.press(.restart) } label: {
+                            Image(systemName: "arrow.counterclockwise.circle").font(.system(size: 26, weight: .semibold))
+                        }
+                        .buttonStyle(.plain).frame(width: 44, height: 44)
+                        .accessibilityLabel("Restart timer")
                     }
-                    .buttonStyle(.bordered).tint(red)
-                }
-                Button(s.nextLabel.uppercased()) { link.press(.next) }
-                    .font(.system(.title3, weight: .heavy).width(.condensed))
-                    .buttonStyle(.borderedProminent).tint(red).foregroundStyle(.black)
+                    Button { link.press(.next) } label: {
+                        Text(s.nextLabel.uppercased())
+                            .font(.system(size: 22, weight: .heavy).width(.condensed))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity).padding(.vertical, 7)
+                            .background(red.opacity(s.canNext ? 1 : 0.35), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
                     .disabled(!s.canNext)
+                }
             }
             if !link.reachable && s.active {
-                Text("iPhone out of reach — buttons send when back").font(.system(size: 10)).foregroundStyle(red.opacity(0.5))
+                Text("iPhone out of reach").font(.system(size: 10)).foregroundStyle(red.opacity(0.5))
             }
         }
         .foregroundStyle(red)

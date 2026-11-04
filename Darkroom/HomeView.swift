@@ -101,6 +101,17 @@ struct HomeView: View {
             } else { Spacer() }
         }
         .padding(20)
+        #if DEBUG
+        // Test runs: open a walk-through at its first timed step, with the first
+        // negative and tissue chosen. Debug builds only.
+        .task(id: store.snapshot?.fetchedAt) {
+            guard ProcessInfo.processInfo.environment["DARKROOM_TEST_WALK"] != nil, walk == nil, store.snapshot != nil else { return }
+            start()
+            guard let m = walk else { return }
+            for what in SelectWhat.allCases { if let first = store.items(what).first { m.draft.layers[0][what.layerField] = first.id } }
+            if let i = m.pages.firstIndex(where: { $0.step.map { !$0.isSelect } ?? false }) { m.draft.page = i }
+        }
+        #endif
         .fullScreenCover(item: $walk) { m in WalkView(model: m) }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { Task { await store.signOut() } }
@@ -148,7 +159,7 @@ struct HomeView: View {
     private func show(_ d: PrintDraft) {
         let m = WalkModel(store: store, draft: d)
         m.onClose = { walk = nil }
-        PhoneWatch.shared.onCommand = { [weak m] cmd in m?.handle(cmd) }
+        PhoneWatch.shared.onCommand = { [weak m] cmd, page in m?.handle(cmd, on: page) }
         walk = m
     }
 }
