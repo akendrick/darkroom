@@ -178,16 +178,19 @@ final class WalkModel {
                       !r.alarmed, let left = r.timer.remaining(), left <= 0 else { continue }
                 r.alarmed = true
                 self.draft.recs[key] = r
-                Alarm.ring()
+                if !StepAlarm.shared.usable { Alarm.ring() }   // else AlarmKit rings it
             }
         }
     }
 
-    /// The same alarm when the phone is locked or the app is in the background.
+    /// The same alarm when the phone is locked or the app is in the background:
+    /// AlarmKit's, or a notification where that isn't allowed.
     private func scheduleAlarm() {
         let c = UNUserNotificationCenter.current()
         c.removePendingNotificationRequests(withIdentifiers: ["step-timer"])
-        guard let end = rec.timer.endsAt, end > .now, let s = page.step else { return }
+        let end = rec.timer.endsAt.flatMap { $0 > .now ? $0 : nil }
+        StepAlarm.shared.set(end, title: page.step.map { "\($0.name) — time" } ?? "Time")
+        guard !StepAlarm.shared.usable, let end, let s = page.step else { return }
         let n = UNMutableNotificationContent()
         n.title = "\(s.name) — time"
         n.body = s.tray.map { "Tray \($0)" } ?? "Next step on the phone"
@@ -264,6 +267,7 @@ final class WalkModel {
     private func close() {
         alarmTask?.cancel()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["step-timer"])
+        StepAlarm.shared.set(nil, title: "")
         PhoneWatch.shared.send(.idle)
         LiveTimer.shared.end()
         onClose?()

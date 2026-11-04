@@ -18,6 +18,7 @@ struct DarkroomApp: App {
                 .preferredColorScheme(Look.shared.darkroom ? .dark : .light)
                 .task {
                     _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+                    await StepAlarm.shared.authorize()
                     await store.refresh()
                 }
         }

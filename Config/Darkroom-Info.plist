@@ -5,6 +5,8 @@
 	<!-- Merged with the keys Xcode generates from the build settings. -->
 	<key>DarkroomServer</key>
 	<string>$(DARKROOM_SERVER)</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Rings when a step's time is up, even with the phone locked or on silent.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- Lets a Debug build reach the local test server (http://localhost). -->
