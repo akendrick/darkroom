@@ -1,0 +1,258 @@
+import Foundation
+import Network
+import Observation
+import UIKit
+
+/// A negative, tissue or support paper added on the phone, waiting to be sent.
+struct PendingMaterial: Codable, Equatable {
+    var tempId: Int             // below 0, used in drafts until the server gives a real id
+    var what: SelectWhat
+    var body: JSON
+    var label: String
+}
+
+/// Everything the app keeps on the phone, and the queue of things to send.
+/// Works the same with or without a connection: changes are saved here first
+/// and sent when knotwork.ca can be reached.
+@MainActor @Observable
+final class AppStore {
+    private(set) var server = Server(base: Server.defaultBase, key: Keychain.read())
+    var snapshot: Snapshot?
+    var drafts: [String: PrintDraft] = [:]
+    var pendingMaterials: [PendingMaterial] = []
+    /// Phone-only material id → server id, once sent.
+    var idMap: [Int: Int] = [:]
+    var online = true
+    var syncing = false
+    var message: String?
+
+    var signedIn: Bool { server.key != nil }
+    var pendingCount: Int {
+        pendingMaterials.count + drafts.values.filter { $0.unsent || $0.pendingImage != nil }.count
+    }
+
+    private let monitor = NWPathMonitor()
+    private var flushing = false
+    private var flushAgain = false
+    private var listsChanged = false
+
+    init() {
+        load()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                guard let self else { return }
+                let was = self.online
+                self.online = path.status == .satisfied
+                if self.online && !was { self.flush() }
+            }
+        }
+        monitor.start(queue: .global(qos: .utility))
+    }
+
+    // MARK: Sign in
+
+    func signIn(password: String, base: URL) async throws {
+        var s = Server(base: base, key: nil)
+        let key = try await s.signIn(password: password, deviceName: UIDevice.current.name)
+        Keychain.save(key)
+        UserDefaults.standard.set(base.absoluteString, forKey: "server")
+        s.key = key
+        server = s
+        await refresh()
+    }
+
+    func signOut() async {
+        await server.signOut()
+        Keychain.delete()
+        server.key = nil
+    }
+
+    // MARK: Sync
+
+    /// Sends anything waiting, then fetches the latest lists from the server.
+    func refresh() async {
+        guard signedIn, !syncing else { return }
+        syncing = true; defer { syncing = false }
+        await flushNow()
+        do {
+            let raw = try await server.sync()
+            snapshot = Snapshot(raw: raw, fetchedAt: .now)
+            // Prints still in progress on the server (started on the web page)
+            // can be carried on here. A draft on this phone wins over the server's copy.
+            for p in snapshot!.inProgress {
+                guard let d = PrintDraft(server: p) else { continue }
+                if drafts.values.contains(where: { $0.photoId == d.photoId || $0.clientId == d.clientId }) { continue }
+                drafts[d.clientId] = d
+            }
+            // Forget finished prints the server has, and in-progress ones finished elsewhere.
+            let serverOpen = Set(snapshot!.inProgress.compactMap { $0["id"].int })
+            drafts = drafts.filter { _, d in
+                if d.unsent || d.pendingImage != nil { return true }
+                if d.finished { return false }
+                return d.photoId == nil || serverOpen.contains(d.photoId!)
+            }
+            message = nil
+            save()
+        } catch let e as ServerError {
+            if e.signedOut { Keychain.delete(); server.key = nil }
+            message = e.retry ? "Offline — using what's on this phone" : e.message
+        } catch { message = error.localizedDescription }
+    }
+
+    // MARK: Drafts
+
+    func update(_ d: PrintDraft, send: Bool = false) {
+        var d = d
+        d.updatedAt = .now
+        if send { d.unsent = true }
+        drafts[d.clientId] = d
+        save()
+        if send { flush() }
+    }
+
+    func addMaterial(_ what: SelectWhat, name: String, paperId: Int?) -> Material {
+        let temp = -Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000 - 1
+        let body: JSON = switch what {
+        case .negative: .object(["title_id": .string(name), "date_created": .string(Clock.today())])
+        case .carbon_tissue: .object(["title_id": .string(name), "date_poured": .string(Clock.today())])
+        case .support_paper: .object(["mark": .string(name), "paper_id": .from(paperId)])
+        }
+        pendingMaterials.append(PendingMaterial(tempId: temp, what: what, body: body, label: name))
+        save(); flush()
+        return Material(id: temp, label: name, sub: "added on this phone")
+    }
+
+    /// Server materials plus any added on this phone and not yet sent.
+    func items(_ what: SelectWhat) -> [Material] {
+        let local = pendingMaterials.filter { $0.what == what }
+            .map { Material(id: $0.tempId, label: $0.label, sub: "added on this phone — sends when online") }
+        let server = (snapshot?.items(what) ?? []).sorted { $0.id > $1.id }
+        return local.reversed() + server
+    }
+
+    func attachImage(_ jpeg: Data, to clientId: String) {
+        guard var d = drafts[clientId] else { return }
+        let name = "\(clientId)-\(Int(Date().timeIntervalSince1970)).jpg"
+        try? jpeg.write(to: imagesDir.appendingPathComponent(name), options: .atomic)
+        if let old = d.pendingImage { try? FileManager.default.removeItem(at: imagesDir.appendingPathComponent(old)) }
+        d.pendingImage = name
+        d.hasImage = true
+        update(d)
+        flush()
+    }
+
+    // MARK: Sending
+
+    /// Sends what's waiting, one thing at a time, in the order it was made.
+    func flush() { Task { await flushNow() } }
+
+    func flushNow() async {
+        guard signedIn else { return }
+        if flushing { flushAgain = true; return }
+        flushing = true; defer { flushing = false }
+        repeat {
+            flushAgain = false
+            do { try await sendAll() }
+            catch let e as ServerError {
+                if e.signedOut { Keychain.delete(); server.key = nil; message = "Signed out — sign in again to send" }
+                else if e.retry { message = "Not sent yet — kept on this phone" }
+                else { message = "Not sent: \(e.message)" }
+                return
+            } catch { return }
+        } while flushAgain
+        if pendingCount == 0 { message = nil }
+        // New materials went up: fetch the lists so they show with their server names.
+        if listsChanged, let raw = try? await server.sync() {
+            listsChanged = false
+            snapshot = Snapshot(raw: raw, fetchedAt: .now); save()
+        }
+    }
+
+    private func sendAll() async throws {
+        // 1. Materials added on the phone, so prints can point at them.
+        while let m = pendingMaterials.first {
+            let r = try await server.request("darkroom-api.php?res=\(m.what.resource)", method: "POST", body: m.body)
+            guard let id = r["id"].int else { throw ServerError(message: "Server error", status: 500) }
+            idMap[m.tempId] = id
+            pendingMaterials.removeFirst()
+            // Point every draft at the real id now that the server has it.
+            for (k, var d) in drafts {
+                d.layers = d.layers.map { $0.mapValues { $0 == m.tempId ? id : $0 } }
+                drafts[k] = d
+            }
+            listsChanged = true
+            save()
+        }
+        // 2. Prints, oldest change first.
+        for key in drafts.values.filter(\.unsent).sorted(by: { $0.updatedAt < $1.updatedAt }).map(\.clientId) {
+            guard let d = drafts[key], let body = d.payload(snapshot, ids: idMap) else { continue }
+            let stamp = d.updatedAt
+            var photoId = d.photoId
+            if photoId == nil {
+                var create = body.object; create["client_id"] = .string(d.clientId)
+                let r = try await server.request("darkroom-api.php?res=photo", method: "POST", body: .object(create))
+                photoId = r["id"].int
+                // Sent before (signal dropped before the answer): update that print instead.
+                if r["duplicate"].flag, let id = photoId {
+                    _ = try await server.request("darkroom-api.php?res=photo&id=\(id)", method: "PATCH", body: body)
+                }
+            } else {
+                _ = try await server.request("darkroom-api.php?res=photo&id=\(photoId!)", method: "PATCH", body: body)
+            }
+            guard var now = drafts[key] else { continue }
+            now.photoId = photoId
+            if now.updatedAt == stamp { now.unsent = false }   // not changed while sending
+            drafts[key] = now
+            save()
+        }
+        // 3. Photos, once their print is on the server.
+        for key in drafts.values.filter({ $0.pendingImage != nil && $0.photoId != nil }).map(\.clientId) {
+            guard let d = drafts[key], let name = d.pendingImage, let pid = d.photoId else { continue }
+            let url = imagesDir.appendingPathComponent(name)
+            if let jpeg = try? Data(contentsOf: url) { _ = try await server.upload(jpeg: jpeg, photoId: pid) }
+            try? FileManager.default.removeItem(at: url)
+            guard var now = drafts[key] else { continue }
+            if now.pendingImage == name { now.pendingImage = nil }
+            drafts[key] = now
+            save()
+        }
+        // Finished and fully sent: nothing more to keep.
+        drafts = drafts.filter { !($0.value.finished && !$0.value.unsent && $0.value.pendingImage == nil) }
+        save()
+    }
+
+    // MARK: Files
+
+    private struct Saved: Codable {
+        var snapshot: Snapshot?
+        var drafts: [String: PrintDraft]
+        var pendingMaterials: [PendingMaterial]
+        var idMap: [Int: Int]
+    }
+
+    private var folder: URL {
+        let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Darkroom", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }
+    var imagesDir: URL {
+        let u = folder.appendingPathComponent("images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }
+
+    func save() {
+        let s = Saved(snapshot: snapshot, drafts: drafts, pendingMaterials: pendingMaterials, idMap: idMap)
+        if let d = try? JSONEncoder().encode(s) {
+            try? d.write(to: folder.appendingPathComponent("state.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    private func load() {
+        if let saved = UserDefaults.standard.string(forKey: "server"), let u = URL(string: saved) { server.base = u }
+        guard let d = try? Data(contentsOf: folder.appendingPathComponent("state.json")),
+              let s = try? JSONDecoder().decode(Saved.self, from: d) else { return }
+        snapshot = s.snapshot; drafts = s.drafts; pendingMaterials = s.pendingMaterials; idMap = s.idMap
+    }
+}

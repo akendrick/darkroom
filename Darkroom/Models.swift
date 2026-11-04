@@ -1,0 +1,134 @@
+import Foundation
+
+/// The server's sync feed (darkroom-api.php?res=sync), kept on the phone so
+/// the walk-through works with no connection.
+struct Snapshot: Codable, Equatable {
+    var raw: JSON
+    var fetchedAt: Date
+
+    var photoTypes: [PhotoType] { raw["photo_types"].array.map(PhotoType.init) }
+    var stepKinds: [JSON] { raw["step_kinds"].array }
+    var presets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    var batches: [Batch] { raw["chemistry"].array.map(Batch.init).filter { !$0.archived } }
+    var papers: [Paper] { raw["papers"].array.map(Paper.init).filter { !$0.archived } }
+    var inProgress: [JSON] { raw["in_progress"].array }
+    var recent: [JSON] { raw["recent"].array }
+
+    func items(_ what: SelectWhat) -> [Material] {
+        raw[what.syncKey].array.map { Material(what: what, row: $0) }.filter { !$0.archived }
+    }
+    func preset(_ id: Int?) -> Preset? { presets.first { $0.id == id } }
+    func typeName(_ id: Int?) -> String { photoTypes.first { $0.id == id }?.name ?? "Print" }
+}
+
+struct PhotoType: Identifiable, Equatable {
+    let id: Int, name: String, hasLayers: Bool
+    init(_ j: JSON) { id = j["id"].int ?? 0; name = j["name"].string ?? ""; hasLayers = j["has_layers"].flag }
+}
+
+struct Preset: Identifiable, Equatable {
+    let id: Int, photoTypeId: Int, name: String, isDefault: Bool, archived: Bool, steps: [Step]
+    init(_ j: JSON) {
+        id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
+        isDefault = j["is_default"].flag; archived = j["archived"].flag
+        steps = j["steps"].array.map(Step.init).filter { !$0.archived }
+    }
+}
+
+struct Step: Identifiable, Equatable, Hashable {
+    let id: Int, name: String, kind: String, selectWhat: SelectWhat?, perLayer: Bool, asksTemp: Bool
+    let tray: Int?, chemistryTypeId: Int?, defaultSeconds: Int?, minSeconds: Int?, maxSeconds: Int?
+    let defaultTemp: Double?, optional: Bool, recordsPh: Bool, lightsOkAfter: Bool
+    let notes: String?, sameAsStepId: Int?, archived: Bool
+
+    init(_ j: JSON) {
+        id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
+        selectWhat = j["select_what"].string.flatMap(SelectWhat.init(rawValue:))
+        perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
+        chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
+        minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
+        optional = j["optional"].flag; recordsPh = j["records_ph"].flag; lightsOkAfter = j["lights_ok_after"].flag
+        notes = j["notes"].string; sameAsStepId = j["same_as_step_id"].int; archived = j["archived"].flag
+    }
+
+    var isSelect: Bool { kind == "select" }
+    var isExposure: Bool { kind == "exposure" }
+}
+
+/// What a "Select a material" step chooses, and the print layer field it fills.
+enum SelectWhat: String, Codable, CaseIterable {
+    case negative, carbon_tissue, support_paper
+
+    var layerField: String { rawValue + "_id" }
+    var syncKey: String {
+        switch self { case .negative: "negatives"; case .carbon_tissue: "carbon_tissues"; case .support_paper: "support_papers" }
+    }
+    var noun: String {
+        switch self { case .negative: "negative"; case .carbon_tissue: "carbon tissue"; case .support_paper: "support paper" }
+    }
+    var resource: String { rawValue }
+}
+
+/// A negative, tissue sheet or support paper, as listed for choosing.
+struct Material: Identifiable, Equatable {
+    let id: Int, label: String, sub: String?, archived: Bool
+
+    init(id: Int, label: String, sub: String?) { self.id = id; self.label = label; self.sub = sub; archived = false }
+
+    init(what: SelectWhat, row j: JSON) {
+        id = j["id"].int ?? 0; archived = j["archived"].flag
+        // Same labels as the web page: "Title.26.11", or "#12 26.11".
+        func dated(_ title: String?, _ date: String?) -> String {
+            let ym = date.map { String($0.dropFirst(2).prefix(5)).replacingOccurrences(of: "-", with: ".") } ?? ""
+            return title.map { "\($0).\(ym)" } ?? "#\(j["id"].int ?? 0) \(ym)"
+        }
+        switch what {
+        case .negative:
+            label = dated(j["title_id"].string, j["date_created"].string); sub = j["settings_notes"].string
+        case .carbon_tissue:
+            label = dated(j["title_id"].string, j["date_poured"].string)
+            let s = [j["size"].string, j["chem_label"].string].compactMap { $0 }.joined(separator: " · ")
+            sub = s.isEmpty ? nil : s
+        case .support_paper:
+            let paper = j["paper_label"].string ?? j["manufacturer"].string ?? ""
+            label = "\(j["mark"].string ?? "#\(id)") (\(paper))"; sub = j["notes"].string
+        }
+    }
+}
+
+struct Paper: Identifiable, Equatable {
+    let id: Int, name: String, archived: Bool
+    init(_ j: JSON) {
+        id = j["id"].int ?? 0; archived = j["archived"].flag
+        let n = [j["manufacturer"].string, j["label"].string].compactMap { $0 }.joined(separator: " ")
+        name = n.isEmpty ? "#\(id)" : n
+    }
+}
+
+struct Batch: Identifiable, Equatable {
+    let id: Int, typeId: Int?, label: String, archived: Bool
+    init(_ j: JSON) {
+        id = j["id"].int ?? 0; typeId = j["type_id"].int; archived = j["archived"].flag
+        let type = j["type_name"].string ?? "Chemistry"
+        label = j["label"].string.map { "\($0) (\(type))" } ?? "\(type) \(j["date_created"].string ?? "")"
+    }
+}
+
+enum ExposureMethod: String, CaseIterable, Codable {
+    case contact, enlarger, in_camera
+    var label: String {
+        switch self { case .contact: "Contact (UV / sun)"; case .enlarger: "Enlarger"; case .in_camera: "In camera" }
+    }
+}
+
+enum Clock {
+    /// Local "YYYY-MM-DD HH:MM:SS", as the web page records step start times.
+    static func stamp(_ d: Date = .now) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f.string(from: d)
+    }
+    static func today(_ d: Date = .now) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
+    }
+}

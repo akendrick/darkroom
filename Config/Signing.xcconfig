@@ -1,0 +1,14 @@
+// Signing.xcconfig — the only file to change for TestFlight.
+//
+// The TestFlight partner's paid developer team, and the app's bundle ID as
+// registered in their App Store Connect. The Watch app's ID is derived from it
+// (it must start with the iPhone app's ID).
+//
+// Left empty, the app still builds and runs in the Simulator.
+
+DEVELOPMENT_TEAM =
+APP_BUNDLE_ID = ca.knotwork.darkroom
+
+// Server the app talks to. Debug builds can switch to the local test server
+// from the sign-in screen.
+DARKROOM_SERVER = https:/$()/knotwork.ca
