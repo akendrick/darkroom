@@ -57,7 +57,7 @@ final class WalkModel {
     /// A new record starts from the preset: its time, temperature and batch.
     private func fresh() -> StepRecord {
         var r = StepRecord()
-        if let s = page.step { r.timer.target = s.defaultSeconds; r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s) }
+        if let s = page.step { r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s) }
         return r
     }
 
@@ -102,7 +102,24 @@ final class WalkModel {
 
     // MARK: Timer
 
-    var target: Int? { rec.manual ?? page.step?.defaultSeconds }
+    var target: Int? { rec.manual ?? page.step.flatMap(readyTime) }
+
+    /// The time a step starts with, so it's tap and go: the preset's, else the
+    /// time this step took on the last print that had it.
+    func readyTime(_ s: Step) -> Int? {
+        if let t = s.defaultSeconds { return t }
+        let mine = store.drafts.values.filter { $0.clientId != clientId }.sorted { $0.updatedAt > $1.updatedAt }
+        for d in mine {
+            if let r = d.recs.first(where: { $0.key.hasPrefix("\(s.id):") && $0.value.done && !$0.value.skipped })?.value,
+               let t = r.seconds { return t }
+        }
+        for p in (snap?.inProgress ?? []) + (snap?.recent ?? []) {
+            for st in p["steps"].array where st["process_step_id"].int == s.id && !st["skipped"].flag {
+                if let t = st["seconds"].int { return t }
+            }
+        }
+        return nil
+    }
 
     func startPause() {
         var r = rec
@@ -134,7 +151,7 @@ final class WalkModel {
     func setManual(seconds: Int?) {
         var r = rec
         r.manual = seconds == 0 ? nil : seconds
-        r.timer.target = r.manual ?? page.step?.defaultSeconds
+        r.timer.target = r.manual ?? page.step.flatMap(readyTime)
         r.alarmed = false
         rec = r
         scheduleAlarm()
@@ -170,13 +187,13 @@ final class WalkModel {
 
     // MARK: Moving between pages
 
-    /// On Next a step counts as done and its time is fixed: the typed time,
-    /// else the timer's, else the preset time.
+    /// On Next a step counts as done and its time is fixed: the time the
+    /// timer actually ran (the set time plus any time over), else the set time.
     func next() {
         if let s = page.step, !s.isSelect {
             var r = rec
             r.timer.pause()
-            r.seconds = r.manual ?? (r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : nil) ?? s.defaultSeconds
+            r.seconds = r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
             if r.startedAt == nil { r.startedAt = Clock.stamp() }
             r.skipped = false; r.done = true
             rec = r

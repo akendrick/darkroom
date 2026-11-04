@@ -189,6 +189,13 @@ struct StepPage: View {
                     .onTapGesture { model.startPause() }
                     .accessibilityAddTraits(.isButton)
                     .accessibilityLabel(r.isRunning ? "Pause timer" : "Start timer")
+                    .overlay(alignment: .bottom) {
+                        // Over time: what will be saved is the whole time run.
+                        if d.over {
+                            Text("TOTAL \(Duration.format(Int(r.elapsed(at: ctx.date))))")
+                                .font(Theme.display(30)).foregroundStyle(Theme.red).offset(y: 18)
+                        }
+                    }
             }
             .overlay(alignment: .bottomTrailing) {
                 // Back to zero and counting again, as on the Watch.
@@ -205,7 +212,7 @@ struct StepPage: View {
             }
 
             Field(label: "Time") {
-                TimeWheels(seconds: model.rec.manual ?? step.defaultSeconds ?? 0) { model.setManual(seconds: $0) }
+                TimeWheels(seconds: model.target ?? 0) { model.setManual(seconds: $0) }
                     .padding(.horizontal, -12).padding(.vertical, -10)
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
