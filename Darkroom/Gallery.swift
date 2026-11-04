@@ -43,7 +43,9 @@ struct GalleryView: View {
                 }
             }
             .navigationDestination(for: Int.self) { id in
-                if let p = prints.first(where: { $0["id"].int == id }) { PrintDetail(print: p, base: store.server.base) }
+                if let p = prints.first(where: { $0["id"].int == id }) {
+                    PrintDetail(print: p, base: store.server.base) { await load() }
+                }
             }
             .task { await load() }
         }
@@ -88,7 +90,9 @@ private struct Tile: View {
 struct PrintDetail: View {
     let print: JSON
     let base: URL
+    var reload: () async -> Void = {}
     @State private var zoom = false
+    @State private var editing = false
 
     var body: some View {
         ScrollView {
@@ -124,6 +128,8 @@ struct PrintDetail: View {
         .background(Theme.bg)
         .navigationTitle(print["title"].string ?? "Print")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true } } }
+        .sheet(isPresented: $editing) { PrintEditor(print: print) { await reload() } }
         .fullScreenCover(isPresented: $zoom) {
             ZStack {
                 Color.black.ignoresSafeArea()

@@ -53,16 +53,28 @@ struct WalkButtonStyle: ButtonStyle {
     }
 }
 
-/// The biggest button: red with black text, at the bottom.
+/// The biggest button: red with black text, at the bottom. Compact, it's the
+/// size of a WalkButtonStyle button (the walk-through's Next beside Back).
 struct NextButtonStyle: ButtonStyle {
+    var compact = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Theme.display(34))
-            .tracking(2)
-            .lineLimit(1).minimumScaleFactor(0.6)
-            .foregroundStyle(Theme.onRed)
-            .frame(maxWidth: .infinity, minHeight: 78)
-            .background(Theme.red.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 12))
+        if compact {
+            configuration.label
+                .font(Theme.body.weight(.heavy))
+                .lineLimit(1)
+                .foregroundStyle(Theme.onRed)
+                .padding(.horizontal, 22).padding(.vertical, 14)
+                .frame(minHeight: 54)
+                .background(Theme.red.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 10))
+        } else {
+            configuration.label
+                .font(Theme.display(34))
+                .tracking(2)
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .foregroundStyle(Theme.onRed)
+                .frame(maxWidth: .infinity, minHeight: 78)
+                .background(Theme.red.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 12))
+        }
     }
 }
 

@@ -11,6 +11,9 @@ struct Snapshot: Codable, Equatable {
     var presets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
     var batches: [Batch] { raw["chemistry"].array.map(Batch.init).filter { !$0.archived } }
     var papers: [Paper] { raw["papers"].array.map(Paper.init).filter { !$0.archived } }
+    var chemistryTypes: [(id: Int, name: String)] {
+        raw["chemistry_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
+    }
     var inProgress: [JSON] { raw["in_progress"].array }
     var recent: [JSON] { raw["recent"].array }
 

@@ -60,7 +60,8 @@ struct WalkView: View {
         HStack(spacing: 10) {
             if model.draft.page > 0 { Button("← Back") { model.back() }.buttonStyle(WalkButtonStyle()) }
             if model.page.step?.optional == true { Button("Skip") { model.skip() }.buttonStyle(WalkButtonStyle()) }
-            Button(model.page == .finish ? "FINISH ✓" : "NEXT →") { model.next() }.buttonStyle(NextButtonStyle())
+            Spacer(minLength: 24)
+            Button(model.page == .finish ? "FINISH ✓" : "NEXT →") { model.next() }.buttonStyle(NextButtonStyle(compact: true))
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -116,8 +117,6 @@ struct SelectPage: View {
     @Bindable var model: WalkModel
     let step: Step
     @State private var adding = false
-    @State private var name = ""
-    @State private var paperId: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -126,7 +125,7 @@ struct SelectPage: View {
             if let what = step.selectWhat {
                 Button(adding ? "Cancel" : "+ New \(what.noun)") { adding.toggle() }
                     .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity, alignment: .leading)
-                if adding { newForm(what) }
+                if adding { NewMaterialForm(model: model, what: what) { adding = false } }
                 let cur = model.chosen(what)
                 ForEach(model.store.items(what)) { m in
                     Button { model.pick(what, m.id) } label: {
@@ -143,8 +142,17 @@ struct SelectPage: View {
             }
         }
     }
+}
 
-    @ViewBuilder private func newForm(_ what: SelectWhat) -> some View {
+/// A new negative, tissue sheet or support paper, chosen for this print at once.
+struct NewMaterialForm: View {
+    @Bindable var model: WalkModel
+    let what: SelectWhat
+    let done: () -> Void
+    @State private var name = ""
+    @State private var paperId: Int?
+
+    var body: some View {
         VStack(spacing: 10) {
             Field(label: what == .support_paper ? "Mark" : "Title") {
                 TextField("", text: $name).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -152,7 +160,7 @@ struct SelectPage: View {
             if what == .support_paper {
                 Field(label: "Base paper") {
                     Picker("Base paper", selection: $paperId) {
-                        Text("—").tag(Int?.none)
+                        Text("Choose…").tag(Int?.none)
                         ForEach(model.snap?.papers ?? []) { Text($0.name).tag(Optional($0.id)) }
                     }.pickerStyle(.menu).labelsHidden()
                 }
@@ -160,10 +168,53 @@ struct SelectPage: View {
             Button("Add & choose") {
                 let n = name.trimmingCharacters(in: .whitespaces)
                 guard !n.isEmpty else { model.status = "Type a name first"; return }
+                // The server keeps no support paper without its base paper.
+                if what == .support_paper && paperId == nil { model.status = "Choose the base paper first"; return }
                 model.addMaterial(what, name: n, paperId: paperId)
-                name = ""; adding = false
+                name = ""; done()
             }
             .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// A new chemistry batch, mixed now. Needs a connection: the batch is made
+/// on knotwork.ca and chosen for this step when it's there.
+struct NewBatchForm: View {
+    @Bindable var model: WalkModel
+    let typeId: Int?
+    let done: () -> Void
+    @State private var label = ""
+    @State private var type: Int?
+    @State private var percent: Double?
+    @State private var volume: Double?
+    @State private var busy = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Field(label: "Label") { TextField("", text: $label) }
+            if typeId == nil {
+                Field(label: "Type") {
+                    Picker("Type", selection: $type) {
+                        Text("Choose…").tag(Int?.none)
+                        ForEach(model.snap?.chemistryTypes ?? [], id: \.id) { Text($0.name).tag(Optional($0.id)) }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+            }
+            HStack(spacing: 10) {
+                Field(label: "% solution") { NumberField(value: $percent) }
+                Field(label: "Volume ml") { NumberField(value: $volume) }
+            }
+            Button(busy ? "Adding…" : "Add & choose") {
+                guard let t = typeId ?? type else { model.status = "Choose the type first"; return }
+                busy = true
+                Task {
+                    await model.addBatch(label: label.trimmingCharacters(in: .whitespaces), typeId: t, percent: percent, volume: volume)
+                    busy = false; done()
+                }
+            }
+            .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity)
+            .disabled(busy)
         }
     }
 }
@@ -172,6 +223,9 @@ struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
     @State private var editTemp = false
+    @State private var adjustTime = false
+    @State private var newBatch = false
+    @State private var newMaterial = false
     @State private var ph = ""
 
     init(model: WalkModel, step: Step) {
@@ -225,6 +279,15 @@ struct StepPage: View {
                         }
                     }
             }
+            .padding(.bottom, 44)       // room for the clock and restart buttons under the time
+            .overlay(alignment: .bottomLeading) {
+                // The set time, on wheels, only when asked for.
+                Button { withAnimation { adjustTime.toggle() } } label: {
+                    Image(systemName: adjustTime ? "clock.fill" : "clock").font(.system(size: 34, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.red)
+                .accessibilityLabel(adjustTime ? "Hide time setting" : "Set the time")
+            }
             .overlay(alignment: .bottomTrailing) {
                 // Back to zero and counting again, as on the Watch.
                 Button { model.reset(); model.startPause() } label: {
@@ -232,16 +295,17 @@ struct StepPage: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Theme.red)
                 .accessibilityLabel("Restart timer")
-                .offset(y: 24)
             }
             if step.minSeconds != nil || step.maxSeconds != nil {
                 Text("range \(step.minSeconds.map(Duration.format) ?? "")–\(step.maxSeconds.map(Duration.format) ?? "")")
                     .font(Theme.small).foregroundStyle(Theme.dim).frame(maxWidth: .infinity)
             }
 
-            Field(label: "Time") {
-                TimeWheels(seconds: model.target ?? 0) { model.setManual(seconds: $0) }
-                    .padding(.horizontal, -12).padding(.vertical, -10)
+            if adjustTime {
+                Field(label: "Time") {
+                    TimeWheels(seconds: model.target ?? 0) { model.setManual(seconds: $0) }
+                        .padding(.horizontal, -12).padding(.vertical, -10)
+                }
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
                 if step.recordsPh {
@@ -260,22 +324,32 @@ struct StepPage: View {
                 }
             }
 
-            let batches = model.batches(for: step)
-            if !batches.isEmpty {
-                Field(label: "Batch") {
-                    Picker("Batch", selection: Binding(get: { model.rec.chemistryId }, set: { model.rec.chemistryId = $0 })) {
-                        Text("—").tag(Int?.none)
-                        ForEach(batches) { Text($0.label).tag(Optional($0.id)) }
-                    }.pickerStyle(.menu).labelsHidden()
+            // Chemistry: a step that names a type lists those batches; any
+            // other bath lists them all. A new batch can be mixed from here.
+            if step.chemistryTypeId != nil || step.kind == "bath" {
+                let batches = model.batches(for: step)
+                HStack(alignment: .bottom, spacing: 8) {
+                    Field(label: "Batch") {
+                        Picker("Batch", selection: Binding(get: { model.rec.chemistryId }, set: { model.rec.chemistryId = $0 })) {
+                            Text("—").tag(Int?.none)
+                            ForEach(batches) { Text($0.label).tag(Optional($0.id)) }
+                        }.pickerStyle(.menu).labelsHidden()
+                    }
+                    Button(newBatch ? "Cancel" : "+ New") { newBatch.toggle() }.buttonStyle(WalkButtonStyle())
                 }
+                if newBatch { NewBatchForm(model: model, typeId: step.chemistryTypeId) { newBatch = false } }
             }
             if let what = step.selectWhat {
-                Field(label: what.noun.capitalized) {
-                    Picker(what.noun, selection: Binding(get: { model.chosen(what) }, set: { model.pick(what, $0) })) {
-                        Text("—").tag(Int?.none)
-                        ForEach(model.store.items(what)) { Text($0.label).tag(Optional($0.id)) }
-                    }.pickerStyle(.menu).labelsHidden()
+                HStack(alignment: .bottom, spacing: 8) {
+                    Field(label: what.noun.capitalized) {
+                        Picker(what.noun, selection: Binding(get: { model.chosen(what) }, set: { model.pick(what, $0) })) {
+                            Text("—").tag(Int?.none)
+                            ForEach(model.store.items(what)) { Text($0.label).tag(Optional($0.id)) }
+                        }.pickerStyle(.menu).labelsHidden()
+                    }
+                    Button(newMaterial ? "Cancel" : "+ New") { newMaterial.toggle() }.buttonStyle(WalkButtonStyle())
                 }
+                if newMaterial { NewMaterialForm(model: model, what: what) { newMaterial = false } }
             }
             Field(label: "Note") {
                 TextField("optional", text: Binding(get: { model.rec.notes ?? "" },

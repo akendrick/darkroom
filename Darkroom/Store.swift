@@ -35,6 +35,7 @@ final class AppStore {
     private var flushing = false
     private var flushAgain = false
     private var listsChanged = false
+    private var refused: String?     // a material the server turned down, to say so once sending ends
 
     init() {
         load()
@@ -122,6 +123,18 @@ final class AppStore {
         return Material(id: temp, label: name, sub: "added on this phone")
     }
 
+    /// A chemistry batch mixed now, made on the server straight away (a print's
+    /// steps point at it, so it isn't queued like a material).
+    func addBatch(label: String, typeId: Int, percent: Double?, volume: Double?) async throws -> Int {
+        let body: JSON = .object(["label": .from(label.isEmpty ? nil : label), "type_id": .from(typeId),
+                                  "percent_solution": .from(percent), "volume_ml": .from(volume),
+                                  "date_created": .string(Clock.today()), "mixed_at": .string(Clock.stamp())])
+        let r = try await server.request("darkroom-api.php?res=chemistry", method: "POST", body: body)
+        guard let id = r["id"].int else { throw ServerError(message: "Server error", status: 500) }
+        if let raw = try? await server.sync() { snapshot = Snapshot(raw: raw, fetchedAt: .now); save() }
+        return id
+    }
+
     /// Server materials plus any added on this phone and not yet sent.
     func items(_ what: SelectWhat) -> [Material] {
         let local = pendingMaterials.filter { $0.what == what }
@@ -160,7 +173,7 @@ final class AppStore {
                 return
             } catch { return }
         } while flushAgain
-        if pendingCount == 0 { message = nil }
+        if pendingCount == 0 { message = refused; refused = nil }
         // New materials went up: fetch the lists so they show with their server names.
         if listsChanged, let raw = try? await server.sync() {
             listsChanged = false
@@ -171,7 +184,20 @@ final class AppStore {
     private func sendAll() async throws {
         // 1. Materials added on the phone, so prints can point at them.
         while let m = pendingMaterials.first {
-            let r = try await server.request("darkroom-api.php?res=\(m.what.resource)", method: "POST", body: m.body)
+            let r: JSON
+            do { r = try await server.request("darkroom-api.php?res=\(m.what.resource)", method: "POST", body: m.body) }
+            catch let e as ServerError where !e.retry && !e.signedOut {
+                // Refused for good (a support paper with no base paper, say): let it
+                // go so it doesn't hold up everything behind it, and unchoose it.
+                pendingMaterials.removeFirst()
+                for (k, var d) in drafts {
+                    d.layers = d.layers.map { $0.filter { $0.value != m.tempId } }
+                    drafts[k] = d
+                }
+                refused = "\(m.label) not added: \(e.message)"
+                save()
+                continue
+            }
             guard let id = r["id"].int else { throw ServerError(message: "Server error", status: 500) }
             idMap[m.tempId] = id
             pendingMaterials.removeFirst()

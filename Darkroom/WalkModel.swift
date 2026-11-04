@@ -95,9 +95,21 @@ final class WalkModel {
         status = "Added \(name)"
     }
 
+    /// The batches of the step's chemistry type, or every batch when it names none.
     func batches(for s: Step) -> [Batch] {
-        guard let t = s.chemistryTypeId else { return [] }
-        return (snap?.batches ?? []).filter { $0.typeId == t }
+        let all = snap?.batches ?? []
+        guard let t = s.chemistryTypeId else { return all }
+        return all.filter { $0.typeId == t }
+    }
+
+    func addBatch(label: String, typeId: Int, percent: Double?, volume: Double?) async {
+        do {
+            let id = try await store.addBatch(label: label, typeId: typeId, percent: percent, volume: volume)
+            rec.chemistryId = id
+            status = "Added " + (label.isEmpty ? "the batch" : label)
+        } catch let e as ServerError {
+            status = e.retry ? "A new batch needs a connection" : "Not added: \(e.message)"
+        } catch { status = "Not added: \(error.localizedDescription)" }
     }
 
     // MARK: Timer
@@ -253,6 +265,7 @@ final class WalkModel {
         alarmTask?.cancel()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["step-timer"])
         PhoneWatch.shared.send(.idle)
+        LiveTimer.shared.end()
         onClose?()
     }
 
@@ -273,6 +286,22 @@ final class WalkModel {
             active: true, title: title, step: stepPages.contains(page) ? header.replacingOccurrences(of: "Step ", with: "") : "", detail: meta,
             hasTimer: s.map { !$0.isSelect } ?? false, timer: rec.timer,
             canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", pageKey: pageKey, sentAt: .now))
+        pushLive(title: title, meta: meta)
+    }
+
+    /// The same step and timer on the lock screen.
+    private func pushLive(title: String, meta: String) {
+        var state = StepActivity.ContentState(step: title, detail: header)
+        if let s = page.step, !s.isSelect {
+            let t = rec.timer
+            state.detail = [header, s.tray.map { "Tray \($0)" }, meta.isEmpty ? nil : meta].compactMap { $0 }.joined(separator: " · ")
+            if let start = t.startedAt {
+                if let end = t.endsAt { state.endsAt = end } else { state.countFrom = start.addingTimeInterval(-t.carried) }
+            } else {
+                state.still = t.display().text
+            }
+        }
+        LiveTimer.shared.show(print: draft.title.isEmpty ? "Print" : draft.title, state)
     }
 
     var pageKey: String { "\(clientId)#\(draft.page)" }

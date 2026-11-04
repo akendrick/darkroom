@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		D00000000000000000000B01 /* DarkroomWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = D00000000000000000000F02 /* DarkroomWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D00000000000000000000B02 /* DarkroomLive.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D00000000000000000000F05 /* DarkroomLive.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -17,6 +18,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = D00000000000000000000T02;
 			remoteInfo = DarkroomWatch;
+		};
+		D00000000000000000000C02 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D00000000000000000000T03;
+			remoteInfo = DarkroomLive;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -32,6 +40,17 @@
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D00000000000000000000P05 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D00000000000000000000B02 /* DarkroomLive.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -39,12 +58,36 @@
 		D00000000000000000000F02 /* DarkroomWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DarkroomWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D00000000000000000000F03 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		D00000000000000000000F04 /* Darkroom-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Darkroom-Info.plist"; sourceTree = "<group>"; };
+		D00000000000000000000F05 /* DarkroomLive.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DarkroomLive.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D00000000000000000000F06 /* DarkroomLive-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "DarkroomLive-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		D00000000000000000000S01 /* Darkroom */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Darkroom; sourceTree = "<group>"; };
-		D00000000000000000000S02 /* DarkroomWatch */ = {isa = PBXFileSystemSynchronizedRootGroup; path = DarkroomWatch; sourceTree = "<group>"; };
-		D00000000000000000000S03 /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Shared; sourceTree = "<group>"; };
+		D00000000000000000000S01 /* Darkroom */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Darkroom;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000S02 /* DarkroomWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DarkroomWatch;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000S03 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000S04 /* DarkroomLive */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DarkroomLive;
+			sourceTree = "<group>";
+		};
+		D00000000000000000000S05 /* LiveShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LiveShared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +105,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D00000000000000000000P22 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -71,6 +121,8 @@
 				D00000000000000000000S01 /* Darkroom */,
 				D00000000000000000000S02 /* DarkroomWatch */,
 				D00000000000000000000S03 /* Shared */,
+				D00000000000000000000S04 /* DarkroomLive */,
+				D00000000000000000000S05 /* LiveShared */,
 				D00000000000000000000G03 /* Config */,
 				D00000000000000000000G02 /* Products */,
 			);
@@ -81,6 +133,7 @@
 			children = (
 				D00000000000000000000F01 /* Darkroom.app */,
 				D00000000000000000000F02 /* DarkroomWatch.app */,
+				D00000000000000000000F05 /* DarkroomLive.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -90,6 +143,7 @@
 			children = (
 				D00000000000000000000F03 /* Signing.xcconfig */,
 				D00000000000000000000F04 /* Darkroom-Info.plist */,
+				D00000000000000000000F06 /* DarkroomLive-Info.plist */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -105,15 +159,18 @@
 				D00000000000000000000P02 /* Frameworks */,
 				D00000000000000000000P03 /* Resources */,
 				D00000000000000000000P04 /* Embed Watch Content */,
+				D00000000000000000000P05 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				D00000000000000000000D01 /* PBXTargetDependency */,
+				D00000000000000000000D02 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				D00000000000000000000S01 /* Darkroom */,
 				D00000000000000000000S03 /* Shared */,
+				D00000000000000000000S05 /* LiveShared */,
 			);
 			name = Darkroom;
 			packageProductDependencies = (
@@ -145,6 +202,29 @@
 			productReference = D00000000000000000000F02 /* DarkroomWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D00000000000000000000T03 /* DarkroomLive */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D00000000000000000000L04 /* Build configuration list for PBXNativeTarget "DarkroomLive" */;
+			buildPhases = (
+				D00000000000000000000P21 /* Sources */,
+				D00000000000000000000P22 /* Frameworks */,
+				D00000000000000000000P23 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D00000000000000000000S04 /* DarkroomLive */,
+				D00000000000000000000S05 /* LiveShared */,
+			);
+			name = DarkroomLive;
+			packageProductDependencies = (
+			);
+			productName = DarkroomLive;
+			productReference = D00000000000000000000F05 /* DarkroomLive.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -159,6 +239,9 @@
 						CreatedOnToolsVersion = 27.2;
 					};
 					D00000000000000000000T02 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+					D00000000000000000000T03 = {
 						CreatedOnToolsVersion = 27.2;
 					};
 				};
@@ -179,6 +262,7 @@
 			targets = (
 				D00000000000000000000T01 /* Darkroom */,
 				D00000000000000000000T02 /* DarkroomWatch */,
+				D00000000000000000000T03 /* DarkroomLive */,
 			);
 		};
 /* End PBXProject section */
@@ -192,6 +276,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D00000000000000000000P13 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D00000000000000000000P23 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -215,6 +306,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D00000000000000000000P21 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -222,6 +320,11 @@
 			isa = PBXTargetDependency;
 			target = D00000000000000000000T02 /* DarkroomWatch */;
 			targetProxy = D00000000000000000000C01 /* PBXContainerItemProxy */;
+		};
+		D00000000000000000000D02 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D00000000000000000000T03 /* DarkroomLive */;
+			targetProxy = D00000000000000000000C02 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -279,10 +382,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Darkroom-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Takes a photo of the print for its journal entry.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleLightContent;
@@ -309,10 +414,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Darkroom-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Takes a photo of the print for its journal entry.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleLightContent;
@@ -338,6 +445,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(APP_BUNDLE_ID)";
@@ -363,6 +471,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(APP_BUNDLE_ID)";
@@ -379,6 +488,56 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		D00000000000000000000X31 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/DarkroomLive-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).live";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		D00000000000000000000X32 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ABKCFJF5QD;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/DarkroomLive-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).live";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -408,6 +567,15 @@
 			buildConfigurations = (
 				D00000000000000000000X21 /* Debug */,
 				D00000000000000000000X22 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D00000000000000000000L04 /* Build configuration list for PBXNativeTarget "DarkroomLive" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D00000000000000000000X31 /* Debug */,
+				D00000000000000000000X32 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

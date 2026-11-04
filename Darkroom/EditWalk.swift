@@ -40,7 +40,7 @@ struct StepEdit: Identifiable, Equatable {
     func payload(sameAsIndex: Int?) -> JSON {
         .object([
             "id": .from(serverId), "name": .string(name), "kind": .string(kind),
-            "select_what": .from(isSelect ? selectWhat : nil),
+            "select_what": .from(selectWhat),     // any step can also choose a material
             "per_layer": .from(perLayer ? 1 : 0), "asks_temp": .from(asksTemp ? 1 : 0), "tray": .from(tray),
             "chemistry_type_id": .from(isSelect ? nil : chemistryTypeId),
             "default_seconds": .from(defaultSeconds), "min_seconds": .from(minSeconds), "max_seconds": .from(maxSeconds),
@@ -279,17 +279,18 @@ struct StepForm: View {
                         ForEach(kinds, id: \.code) { Text($0.name).tag($0.code) }
                     }.pickerStyle(.menu).labelsHidden()
                 }
-                if step.isSelect {
-                    Field(label: "Choose") {
-                        Picker("Choose", selection: $step.selectWhat) {
-                            Text("—").tag(String?.none)
-                            ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
-                            if let w = step.selectWhat, SelectWhat(rawValue: w) == nil {
-                                Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
-                            }
-                        }.pickerStyle(.menu).labelsHidden()
-                    }
-                } else {
+                // A choose step is only the list; any other step can also choose
+                // one (the support paper on "Soak final support", say).
+                Field(label: step.isSelect ? "Choose" : "Also choose") {
+                    Picker("Choose", selection: $step.selectWhat) {
+                        Text("—").tag(String?.none)
+                        ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
+                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil {
+                            Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
+                        }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                if !step.isSelect {
                     OptionalTime(label: "Default time", none: "None — the timer counts up", seconds: $step.defaultSeconds)
                     HStack(alignment: .top, spacing: 10) {
                         OptionalTime(label: "Shortest", none: "No limit", seconds: $step.minSeconds, compact: true)
@@ -336,7 +337,6 @@ struct StepForm: View {
         .background(Theme.bg)
         .navigationTitle(step.name)
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: step.kind) { _, k in if k != "select" { step.selectWhat = nil } }
     }
 
     private var kinds: [(code: String, name: String)] {
