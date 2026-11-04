@@ -43,9 +43,7 @@ struct GalleryView: View {
                 }
             }
             .navigationDestination(for: Int.self) { id in
-                if let p = prints.first(where: { $0["id"].int == id }) {
-                    PrintDetail(print: p, base: store.server.base) { await load() }
-                }
+                PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
             }
             .task { await load() }
         }
@@ -91,13 +89,54 @@ private struct Tile: View {
     }
 }
 
+/// The prints in gallery order, one at a time: swipe left for the next,
+/// right for the one before. Paging, so it wins over the swipe back to the grid
+/// (which still works from the first print).
+private struct PrintPager: View {
+    let prints: [JSON]
+    let base: URL
+    let reload: () async -> Void
+    @State private var id: Int?
+    @State private var editing = false
+
+    init(prints: [JSON], startId: Int, base: URL, reload: @escaping () async -> Void) {
+        self.prints = prints; self.base = base; self.reload = reload
+        _id = State(initialValue: startId)
+    }
+
+    private var ids: [Int] { prints.compactMap { $0["id"].int } }
+    private var current: JSON? { prints.first { $0["id"].int == id } }
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(ids, id: \.self) { pid in
+                    if let p = prints.first(where: { $0["id"].int == pid }) {
+                        PrintDetail(print: p, base: base).containerRelativeFrame(.horizontal)
+                    }
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $id)
+        .scrollIndicators(.hidden)
+        .background(Theme.bg)
+        .navigationTitle(current.map { printName($0) } ?? "Print")
+        .navigationBarTitleDisplayMode(.inline)
+        // Editing is a sheet over the pager, so no swiping while it's open.
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true }.disabled(current == nil) } }
+        .sheet(isPresented: $editing) {
+            if let current { PrintEditor(print: current) { await reload() } }
+        }
+    }
+}
+
 /// One print: the photo, then what was recorded for it.
 struct PrintDetail: View {
     let print: JSON
     let base: URL
-    var reload: () async -> Void = {}
     @State private var zoom = false
-    @State private var editing = false
 
     var body: some View {
         ScrollView {
@@ -130,11 +169,6 @@ struct PrintDetail: View {
             }
             .padding(16)
         }
-        .background(Theme.bg)
-        .navigationTitle(printName(print))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true } } }
-        .sheet(isPresented: $editing) { PrintEditor(print: print) { await reload() } }
         .fullScreenCover(isPresented: $zoom) {
             ZStack {
                 Color.black.ignoresSafeArea()
