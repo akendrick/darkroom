@@ -101,7 +101,7 @@ struct TimerScreen: View {
                     Text(s.step.uppercased()).font(.system(size: 17, weight: .heavy).width(.compressed)).monospacedDigit()
                 }
             }
-            if !s.detail.isEmpty { Text(s.detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(red.opacity(0.6))
+            if !s.detail.isEmpty { Text(s.detail).font(.system(size: 22, weight: .heavy).width(.compressed)).monospacedDigit()
                 .lineLimit(s.active ? 1 : 3).multilineTextAlignment(.center).minimumScaleFactor(0.8) }
             if s.hasTimer {
                 // The time fills the screen. Tap it to start or pause.

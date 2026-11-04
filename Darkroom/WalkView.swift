@@ -159,13 +159,12 @@ struct SelectPage: View {
 struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
-    @State private var temp = ""
+    @State private var editTemp = false
     @State private var ph = ""
 
     init(model: WalkModel, step: Step) {
         self.model = model; self.step = step
         let r = model.rec
-        _temp = State(initialValue: r.temp.map { $0.formatted() } ?? "")
         _ph = State(initialValue: r.ph.map { $0.formatted() } ?? "")
     }
 
@@ -173,8 +172,25 @@ struct StepPage: View {
         VStack(alignment: .leading, spacing: 14) {
             Title(text: step.name)
             Note(text: step.notes)
-            let meta = [step.tray.map { "Tray \($0)" }, step.defaultTemp.map { "\($0.formatted()) °C" }].compactMap { $0 }
-            if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(Theme.small) }
+            HStack(alignment: .firstTextBaseline) {
+                if let t = step.tray { Text("TRAY \(t)").font(Theme.display(30)) }
+                Spacer()
+                // The temperature, big; tap to change it.
+                if step.asksTemp || step.defaultTemp != nil {
+                    Button { editTemp = true } label: {
+                        Text(model.rec.temp.map { "\($0.formatted()) °C" } ?? "— °C")
+                            .font(Theme.display(54)).monospacedDigit()
+                            .padding(.horizontal, 12).padding(.vertical, 2)
+                            .background(Theme.fill, in: .rect(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Temperature, tap to change")
+                }
+            }
+            .sheet(isPresented: $editTemp) {
+                TempWheel(temp: Binding(get: { model.rec.temp }, set: { model.rec.temp = $0 }), start: step.defaultTemp)
+                    .presentationDetents([.height(300)])
+            }
 
             // The time is the timer: tap it to start or pause.
             TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
@@ -216,12 +232,6 @@ struct StepPage: View {
                     .padding(.horizontal, -12).padding(.vertical, -10)
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
-                if step.asksTemp || step.defaultTemp != nil {
-                    Field(label: "Temp °C") {
-                        TextField("", text: $temp).keyboardType(.decimalPad)
-                            .onChange(of: temp) { _, v in model.rec.temp = Double(v.replacingOccurrences(of: ",", with: ".")) }
-                    }
-                }
                 if step.recordsPh {
                     Field(label: "pH") {
                         TextField("", text: $ph).keyboardType(.decimalPad)
@@ -293,17 +303,44 @@ struct FinishPage: View {
     }
 }
 
+/// Temperature on a scroll wheel, in half degrees.
+struct TempWheel: View {
+    @Binding var temp: Double?
+    let start: Double?
+    @Environment(\.dismiss) private var dismiss
+    private let values = Array(stride(from: 0.0, through: 60.0, by: 0.5))
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("TEMPERATURE").font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+                Spacer()
+                Button("Done") { dismiss() }.font(Theme.body.weight(.bold)).foregroundStyle(Theme.red)
+            }
+            Picker("°C", selection: Binding(get: { temp ?? start ?? 20 }, set: { temp = $0 })) {
+                ForEach(values, id: \.self) { Text("\($0.formatted()) °C").font(Theme.display(34)).foregroundStyle(.black).tag($0) }
+            }
+            .pickerStyle(.wheel).labelsHidden()
+            .background(Theme.box, in: .rect(cornerRadius: 10))
+        }
+        .padding(18)
+        .presentationBackground(.black)
+        .onAppear { if temp == nil { temp = start ?? 20 } }
+    }
+}
+
 // MARK: Menu
 
 /// Save, exit and, later, settings and the other sections of the app.
 struct WalkMenu: View {
     @Bindable var model: WalkModel
+    @State private var editing = false
     var body: some View {
         Menu {
             Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
+            Button("Edit walk-through steps", systemImage: "list.number") { editing = true }
             Section("Coming") {
-                Button("Edit walk-through steps", systemImage: "list.number") {}.disabled(true)
                 Button("Settings", systemImage: "gearshape") {}.disabled(true)
             }
         } label: {
@@ -312,6 +349,7 @@ struct WalkMenu: View {
                 .frame(width: 48, height: 48)
         }
         .accessibilityLabel("Menu")
+        .sheet(isPresented: $editing) { EditWalksView(startOn: model.draft.presetId) }
     }
 }
 
