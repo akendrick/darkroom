@@ -202,6 +202,12 @@ final class WalkModel {
         scheduleAlarm()
     }
 
+    /// Sends the print as it is now, and stays on this page.
+    func saveNow() {
+        send(draft)
+        status = "Saved"
+    }
+
     /// Saves and leaves; the print stays "in progress" to carry on later.
     func saveAndExit() {
         if draft.photoId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
@@ -237,8 +243,8 @@ final class WalkModel {
 
     func pushWatch() {
         let s = page.step
-        let meta = [s?.tray.map { "Tray \($0)" }, (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" }]
-            .compactMap { $0 }.joined(separator: " · ")
+        // The Watch keeps to the essentials: no tray.
+        let meta = (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" } ?? ""
         let title: String = switch page {
         case .start: "New print"
         case .finish: "Finish"
@@ -247,7 +253,7 @@ final class WalkModel {
         // A choice still to make on the phone: the Watch's Next waits for it.
         let canNext = !(s?.isSelect == true && s?.selectWhat.map { chosen($0) == nil } == true)
         PhoneWatch.shared.send(WatchScreen(
-            active: true, title: title, step: stepPages.contains(page) ? header : "", detail: meta,
+            active: true, title: title, step: stepPages.contains(page) ? header.replacingOccurrences(of: "Step ", with: "") : "", detail: meta,
             hasTimer: s.map { !$0.isSelect } ?? false, timer: rec.timer,
             canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", pageKey: pageKey, sentAt: .now))
     }

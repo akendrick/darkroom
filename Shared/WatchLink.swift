@@ -5,8 +5,8 @@ import Foundation
 struct WatchScreen: Codable, Equatable {
     var active: Bool            // a walk-through is open
     var title: String           // page title, e.g. "Hot develop"
-    var step = ""               // "Step 6/9", empty off the step pages
-    var detail: String          // "Tray 3 · 40 °C"
+    var step = ""               // "6/9", empty off the step pages
+    var detail: String          // "40 °C"
     var hasTimer: Bool          // false on choose / start / finish pages
     var timer: StepTimer
     var canNext: Bool           // false while a choice is still needed on the phone

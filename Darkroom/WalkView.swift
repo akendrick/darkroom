@@ -39,8 +39,7 @@ struct WalkView: View {
                 .lineLimit(1).truncationMode(.tail)
             Spacer()
             PhotoButton(model: model)
-            Button("✕ Save & exit") { model.saveAndExit() }
-                .font(Theme.small).buttonStyle(WalkButtonStyle()).fixedSize()
+            WalkMenu(model: model)
         }
         .padding(.horizontal, 16).padding(.top, 8)
     }
@@ -287,6 +286,28 @@ struct FinishPage: View {
     }
 }
 
+// MARK: Menu
+
+/// Save, exit and, later, settings and the other sections of the app.
+struct WalkMenu: View {
+    @Bindable var model: WalkModel
+    var body: some View {
+        Menu {
+            Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
+            Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
+            Section("Coming") {
+                Button("Edit walk-through steps", systemImage: "list.number") {}.disabled(true)
+                Button("Settings", systemImage: "gearshape") {}.disabled(true)
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
+                .frame(width: 48, height: 48)
+        }
+        .accessibilityLabel("Menu")
+    }
+}
+
 // MARK: Photo
 
 /// Take a photo of the print or choose one; shrunk to 1800 px (the server
@@ -304,10 +325,14 @@ struct PhotoButton: View {
             }
             Button("Photo Library", systemImage: "photo") { showLibrary = true }
         } label: {
-            Text(model.draft.hasImage ? "📷 ✓" : "📷 Photo").font(Theme.small)
-                .padding(.horizontal, 12).frame(minHeight: 54)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red, lineWidth: 2))
+            Image(systemName: model.draft.hasImage ? "camera.fill" : "camera")
+                .font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.red)
+                .frame(width: 48, height: 48)
+                .overlay(alignment: .topTrailing) {
+                    if model.draft.hasImage { Image(systemName: "checkmark.circle.fill").font(.system(size: 14)).offset(x: -2, y: 4) }
+                }
         }
+        .accessibilityLabel(model.draft.hasImage ? "Photo taken. Change photo" : "Add photo")
         .photosPicker(isPresented: $showLibrary, selection: $library, matching: .images)
         .onChange(of: library) { _, item in
             guard let item else { return }
