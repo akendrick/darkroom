@@ -63,20 +63,48 @@ struct HomeView: View {
     @State private var confirmSignOut = false
     @State private var editing = false
     @State private var settings = false
-    @State private var gallery = false
 
     private var open: [PrintDraft] {
         store.drafts.values.filter { !$0.finished }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     var body: some View {
+        NavigationStack {
+            ScrollView { content.padding(20) }
+                .background(Theme.bg)
+                .refreshable { await store.refresh() }
+                .toolbar(.hidden, for: .navigationBar)
+        }
+        .tint(Theme.red)
+        #if DEBUG
+        // Test runs: open a walk-through at its first timed step, with the first
+        // negative and tissue chosen. Debug builds only.
+        .task(id: store.snapshot?.fetchedAt) {
+            guard ProcessInfo.processInfo.environment["DARKROOM_TEST_WALK"] != nil, walk == nil, store.snapshot != nil else { return }
+            start()
+            guard let m = walk else { return }
+            for what in SelectWhat.allCases { if let first = store.items(what).first { m.draft.layers[0][what.layerField] = first.id } }
+            if let i = m.pages.firstIndex(where: { $0.step.map { !$0.isSelect } ?? false }) { m.draft.page = i }
+        }
+        #endif
+        .fullScreenCover(item: $walk) { m in WalkView(model: m) }
+        .sheet(isPresented: $editing) { EditWalksView() }
+        .sheet(isPresented: $settings) { SettingsView() }
+        .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("Sign out", role: .destructive) { Task { await store.signOut() } }
+        } message: {
+            Text(store.pendingCount > 0 ? "\(store.pendingCount) change(s) haven't been sent yet and would stay on this phone." : "")
+        }
+    }
+
+    /// Start, then the prints, then any still in progress.
+    private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("DARKROOM").font(Theme.display(44)).foregroundStyle(Theme.red)
                 Spacer()
                 Menu {
                     Button("Refresh lists", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
-                    Button("Prints", systemImage: "photo.on.rectangle") { gallery = true }
                     Button("Edit walk-throughs", systemImage: "list.number") { editing = true }
                     Button("Settings", systemImage: "gearshape") { settings = true }
                     Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { confirmSignOut = true }
@@ -92,44 +120,23 @@ struct HomeView: View {
                 .buttonStyle(NextButtonStyle())
                 .disabled(store.snapshot?.presets.isEmpty ?? true)
 
+            PrintsGrid(reload: store.snapshot?.fetchedAt).padding(.top, 8)
+
             if !open.isEmpty {
                 Text("IN PROGRESS").font(Theme.label).tracking(2).foregroundStyle(Theme.dim).padding(.top, 8)
-                ScrollView {
-                    VStack(spacing: 10) {
-                        ForEach(open) { d in
-                            Button { resume(d) } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text([d.title.isEmpty ? d.defaultTitle(store.snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")).font(Theme.body.weight(.semibold))
-                                    Text(progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(spacing: 10) {
+                    ForEach(open) { d in
+                        Button { resume(d) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text([d.title.isEmpty ? d.defaultTitle(store.snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")).font(Theme.body.weight(.semibold))
+                                Text(progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
                             }
-                            .buttonStyle(WalkButtonStyle())
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(WalkButtonStyle())
                     }
                 }
-            } else { Spacer() }
-        }
-        .padding(20)
-        #if DEBUG
-        // Test runs: open a walk-through at its first timed step, with the first
-        // negative and tissue chosen. Debug builds only.
-        .task(id: store.snapshot?.fetchedAt) {
-            guard ProcessInfo.processInfo.environment["DARKROOM_TEST_WALK"] != nil, walk == nil, store.snapshot != nil else { return }
-            start()
-            guard let m = walk else { return }
-            for what in SelectWhat.allCases { if let first = store.items(what).first { m.draft.layers[0][what.layerField] = first.id } }
-            if let i = m.pages.firstIndex(where: { $0.step.map { !$0.isSelect } ?? false }) { m.draft.page = i }
-        }
-        #endif
-        .fullScreenCover(item: $walk) { m in WalkView(model: m) }
-        .sheet(isPresented: $editing) { EditWalksView() }
-        .sheet(isPresented: $settings) { SettingsView() }
-        .sheet(isPresented: $gallery) { GalleryView() }
-        .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-            Button("Sign out", role: .destructive) { Task { await store.signOut() } }
-        } message: {
-            Text(store.pendingCount > 0 ? "\(store.pendingCount) change(s) haven't been sent yet and would stay on this phone." : "")
+            }
         }
     }
 

@@ -250,6 +250,13 @@ final class WalkModel {
         close()
     }
 
+    /// Throws the print away without saving: nothing from it is kept, here
+    /// or on knotwork.ca.
+    func discard() {
+        store.discard(clientId)
+        close()
+    }
+
     func finish() {
         var d = draft
         d.finished = true

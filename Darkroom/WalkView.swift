@@ -422,23 +422,34 @@ struct TempWheel: View {
 
 // MARK: Menu
 
-/// Save, exit and, later, settings and the other sections of the app.
+/// Save, exit, discard, and the other sections of the app.
 struct WalkMenu: View {
     @Bindable var model: WalkModel
     @State private var editing = false
     @State private var settings = false
+    @State private var confirmDiscard = false
     var body: some View {
         Menu {
             Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
             Button("Edit walk-through steps", systemImage: "list.number") { editing = true }
             Button("Settings", systemImage: "gearshape") { settings = true }
+            Divider()
+            Button("Discard print", systemImage: "trash", role: .destructive) { confirmDiscard = true }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
                 .frame(width: 48, height: 48)
         }
         .accessibilityLabel("Menu")
+        .confirmationDialog("Discard this print?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard", role: .destructive) { model.discard() }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text(model.draft.photoId == nil
+                 ? "Its steps, times and photo are deleted from this phone. This can't be undone."
+                 : "Its steps, times and photo are deleted from this phone and from knotwork.ca. This can't be undone.")
+        }
         .sheet(isPresented: $editing) { EditWalksView(startOn: model.draft.presetId) }
         .sheet(isPresented: $settings) { SettingsView() }
     }

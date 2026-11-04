@@ -1,60 +1,104 @@
 import SwiftUI
 
-/// Every print on knotwork.ca with a photo, newest first. Read straight from
-/// the server, so it needs a connection; the photos themselves are cached.
-struct GalleryView: View {
+/// Every print on knotwork.ca with a photo, newest first, under Start on the
+/// home screen. Read straight from the server, so it needs a connection; the
+/// photos themselves are cached. Long press a print to edit, hide or delete it.
+struct PrintsGrid: View {
+    /// Reloads when this changes (the home screen's lists refresh).
+    var reload: Date?
     @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
     @State private var prints: [JSON] = []
     @State private var loading = true
     @State private var error: String?
     @State private var withoutPhotos = false
+    @State private var showHidden = false
+    @State private var editing: JSON?
+    @State private var deleting: JSON?
     @State private var round = 0        // a refresh tries photos that failed again
+    /// Prints hidden on this phone, by id ("12,15").
+    @AppStorage("hiddenPrints") private var hiddenList = ""
 
-    private var shown: [JSON] { withoutPhotos ? prints : prints.filter { $0["image_path"].string != nil } }
+    private var hidden: Set<Int> { Set(hiddenList.split(separator: ",").compactMap { Int($0) }) }
+    private var shown: [JSON] {
+        prints.filter { p in
+            (withoutPhotos || p["image_path"].string != nil) && (showHidden || !hidden.contains(p["id"].int ?? 0))
+        }
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                if loading && prints.isEmpty { ProgressView().tint(Theme.red).padding(40) }
-                if let error { Text(error).font(Theme.small).foregroundStyle(Theme.dim).padding() }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], spacing: 6) {
-                    ForEach(shown, id: \.self["id"].int) { p in
-                        NavigationLink(value: p["id"].int ?? 0) { Tile(print: p, base: store.server.base) }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .padding(8)
-                .id(round)
-                if !loading && shown.isEmpty && error == nil {
-                    Text("No photos yet").font(Theme.small).foregroundStyle(Theme.dim).padding(40)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("PRINTS").font(Theme.label).tracking(2).foregroundStyle(Theme.dim)
+                Spacer()
+                Menu {
+                    Toggle("Prints without a photo too", isOn: $withoutPhotos)
+                    Toggle("Hidden prints too", isOn: $showHidden)
+                } label: { Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(Theme.red) }
+            }
+            if loading && prints.isEmpty { ProgressView().tint(Theme.red).frame(maxWidth: .infinity).padding(30) }
+            if let error { Text(error).font(Theme.small).foregroundStyle(Theme.dim) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], spacing: 6) {
+                ForEach(shown, id: \.self["id"].int) { p in
+                    let id = p["id"].int ?? 0
+                    NavigationLink(value: id) { Tile(print: p, base: store.server.base) }
+                        .buttonStyle(.plain)
+                        .opacity(hidden.contains(id) ? 0.4 : 1)
+                        .contextMenu {
+                            Button("Edit", systemImage: "pencil") { editing = p }
+                            if hidden.contains(id) {
+                                Button("Show", systemImage: "eye") { setHidden(id, false) }
+                            } else {
+                                Button("Hide", systemImage: "eye.slash") { setHidden(id, true) }
+                            }
+                            Button("Delete", systemImage: "trash", role: .destructive) { deleting = p }
+                        }
                 }
             }
-            .background(Theme.bg)
-            .refreshable { await load() }
-            .navigationTitle("Prints")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Toggle("Prints without a photo too", isOn: $withoutPhotos)
-                    } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
-                }
+            .id(round)
+            if !loading && shown.isEmpty && error == nil {
+                Text("No photos yet").font(Theme.small).foregroundStyle(Theme.dim).padding(.vertical, 20)
             }
-            .navigationDestination(for: Int.self) { id in
-                PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
-            }
-            .task { await load() }
         }
-        .tint(Theme.red)
+        .navigationDestination(for: Int.self) { id in
+            PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
+        }
+        .task(id: reload) { await load() }
+        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
+            if let editing { PrintEditor(print: editing) { await load() } }
+        }
+        .confirmationDialog("Delete this print?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { p in
+            Button("Delete", role: .destructive) { Task { await delete(p) } }
+            Button("Keep it", role: .cancel) {}
+        } message: { p in
+            Text("\(printName(p)) — its photo, steps and notes are deleted from knotwork.ca. This can't be undone.")
+        }
+    }
+
+    private func setHidden(_ id: Int, _ on: Bool) {
+        var h = hidden
+        if on { h.insert(id) } else { h.remove(id) }
+        hiddenList = h.sorted().map(String.init).joined(separator: ",")
     }
 
     private func load() async {
         loading = true; defer { loading = false }
         do { prints = try await store.server.request("darkroom-api.php?res=photo").array; error = nil; round += 1 }
+        catch where Task.isCancelled { }      // a newer reload took over
         catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — photos need a connection" : e.message }
         catch { self.error = error.localizedDescription }
+    }
+
+    private func delete(_ p: JSON) async {
+        guard let id = p["id"].int else { return }
+        do {
+            _ = try await store.server.request("darkroom-api.php?res=photo&id=\(id)", method: "DELETE")
+            prints.removeAll { $0["id"].int == id }
+            setHidden(id, false)
+            error = nil
+        } catch let e as ServerError {
+            error = e.retry ? "Can't reach knotwork.ca — nothing was deleted" : "Not deleted: \(e.message)"
+        } catch { self.error = error.localizedDescription }
     }
 }
 
