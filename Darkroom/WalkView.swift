@@ -22,6 +22,18 @@ struct WalkView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollDismissesKeyboard(.interactively)
+            // Swipe left for Next and right for Back, the same as the buttons
+            // (a swipe never finishes the print).
+            .simultaneousGesture(DragGesture(minimumDistance: 40).onEnded { v in
+                let w = v.translation.width
+                guard abs(w) > 90, abs(v.translation.height) < abs(w) * 0.5 else { return }
+                if w > 0 { if model.draft.page > 0 { model.back() }; return }
+                guard model.page != .finish else { return }
+                if let s = model.page.step, s.isSelect, let what = s.selectWhat, model.chosen(what) == nil {
+                    model.status = "Choose one first"; return
+                }
+                model.next()
+            })
             Text(model.status ?? store.message ?? " ").font(Theme.small).foregroundStyle(Theme.dim)
                 .lineLimit(2).padding(.horizontal, 16).padding(.top, 4)
             footer
