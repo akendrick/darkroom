@@ -62,6 +62,11 @@ struct GalleryView: View {
 
 private func imageURL(_ path: String?, _ base: URL) -> URL? { path.flatMap { URL(string: $0, relativeTo: base) } }
 
+/// A print's name: its title and edition, "Print 2/10".
+func printName(_ p: JSON, none: String = "Print") -> String {
+    [p["title"].string ?? none, p["edition"].string].compactMap { $0 }.joined(separator: " ")
+}
+
 private struct Tile: View {
     let print: JSON
     let base: URL
@@ -72,7 +77,7 @@ private struct Tile: View {
                 if let url {
                     AsyncImage(url: url) { img in img.resizable().scaledToFill() } placeholder: { Theme.box }
                 } else {
-                    Text(print["title"].string ?? "#\(print["id"].int ?? 0)").font(Theme.small)
+                    Text(printName(print, none: "#\(print["id"].int ?? 0)")).font(Theme.small)
                         .foregroundStyle(.black).padding(6).frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.box)
                 }
             }
@@ -104,7 +109,7 @@ struct PrintDetail: View {
                     .clipShape(.rect(cornerRadius: 8))
                     .onTapGesture { zoom = true }
                 }
-                Text((print["title"].string ?? "Print").uppercased()).font(Theme.display(36)).foregroundStyle(Theme.red)
+                Text(printName(print).uppercased()).font(Theme.display(36)).foregroundStyle(Theme.red)
                 Text([print["type_name"].string, print["preset_name"].string, print["date_exposed"].string, "#\(print["id"].int ?? 0)"]
                     .compactMap { $0 }.joined(separator: " · ")).font(Theme.small).foregroundStyle(Theme.dim)
                 if let n = print["notes"].string { Text(n).font(Theme.body) }
@@ -126,7 +131,7 @@ struct PrintDetail: View {
             .padding(16)
         }
         .background(Theme.bg)
-        .navigationTitle(print["title"].string ?? "Print")
+        .navigationTitle(printName(print))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true } } }
         .sheet(isPresented: $editing) { PrintEditor(print: print) { await reload() } }

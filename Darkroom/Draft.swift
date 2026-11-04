@@ -23,6 +23,7 @@ struct PrintDraft: Codable, Identifiable, Equatable {
     var typeId: Int
     var presetId: Int
     var title = ""
+    var edition: String?        // free text, after the title: "A", "2/10"
     var date = Clock.today()
     var method: ExposureMethod?
     var notes = ""
@@ -109,6 +110,7 @@ extension PrintDraft {
         let exposure = steps.first { $0["kind"].string == "exposure" && !$0["skipped"].flag && $0["seconds"].int != nil }
         return .object([
             "title": .string(title.isEmpty ? defaultTitle(snap) : title),
+            "edition": .from(edition.flatMap { $0.isEmpty ? nil : $0 }),
             "photo_type_id": .from(typeId), "preset_id": .from(presetId),
             "status": .string(finished ? "done" : "in_progress"), "date_exposed": .string(date),
             "exposure_seconds": exposure?["seconds"] ?? .null, "exposure_method": .from(method?.rawValue),
@@ -121,7 +123,7 @@ extension PrintDraft {
         guard let id = p["id"].int, let type = p["photo_type_id"].int, let preset = p["preset_id"].int else { return nil }
         photoId = id; typeId = type; presetId = preset
         clientId = p["client_id"].string ?? "photo-\(id)"
-        title = p["title"].string ?? ""; date = p["date_exposed"].string ?? Clock.today()
+        title = p["title"].string ?? ""; edition = p["edition"].string; date = p["date_exposed"].string ?? Clock.today()
         method = p["exposure_method"].string.flatMap(ExposureMethod.init(rawValue:))
         notes = p["notes"].string ?? ""; hasImage = p["image_path"].string != nil
         let ls = p["layers"].array.map { l -> [String: Int] in

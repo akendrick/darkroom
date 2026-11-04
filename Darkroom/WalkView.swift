@@ -377,6 +377,11 @@ struct FinishPage: View {
                 }
             }
             Field(label: "Title") { TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title) }
+            Field(label: "Edition") {
+                TextField("A or 2/10 — shown after the title", text: Binding(get: { model.draft.edition ?? "" },
+                                                                           set: { model.draft.edition = String($0.prefix(20)) }))
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+            }
             Field(label: "Notes") { TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6) }
         }
     }

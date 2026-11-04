@@ -11,6 +11,7 @@ struct PrintEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var title: String
+    @State private var edition: String
     @State private var date: String
     @State private var notes: String
     @State private var inGallery: Bool
@@ -36,6 +37,7 @@ struct PrintEditor: View {
     init(print: JSON, saved: @escaping () async -> Void) {
         self.print = print; self.saved = saved
         _title = State(initialValue: print["title"].string ?? "")
+        _edition = State(initialValue: print["edition"].string ?? "")
         _date = State(initialValue: print["date_exposed"].string ?? "")
         _notes = State(initialValue: print["notes"].string ?? "")
         _inGallery = State(initialValue: print["show_in_gallery"].flag)
@@ -58,6 +60,10 @@ struct PrintEditor: View {
                 VStack(alignment: .leading, spacing: 14) {
                     photo
                     Field(label: "Title") { TextField("", text: $title) }
+                    Field(label: "Edition") {
+                        TextField("A or 2/10 — shown after the title", text: $edition)
+                            .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    }
                     Field(label: "Date exposed") {
                         TextField("YYYY-MM-DD", text: $date).keyboardType(.numbersAndPunctuation)
                     }
@@ -184,7 +190,9 @@ struct PrintEditor: View {
         let d = date.trimmingCharacters(in: .whitespaces)
         if !d.isEmpty && d.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) == nil { error = "The date is YYYY-MM-DD, like \(Clock.today())"; return }
         let body: JSON = .object([
-            "title": .from(title.isEmpty ? nil : title), "date_exposed": .from(d.isEmpty ? nil : d),
+            "title": .from(title.isEmpty ? nil : title),
+            "edition": .from(edition.trimmingCharacters(in: .whitespaces).isEmpty ? nil : String(edition.trimmingCharacters(in: .whitespaces).prefix(20))),
+            "date_exposed": .from(d.isEmpty ? nil : d),
             "notes": .from(notes.isEmpty ? nil : notes), "show_in_gallery": .from(inGallery ? 1 : 0),
             "layers": .array(layers.map { l in .object(l.mapValues { .from($0) }) }),
             "steps": .array(out),

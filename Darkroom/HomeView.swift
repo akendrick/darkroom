@@ -99,7 +99,7 @@ struct HomeView: View {
                         ForEach(open) { d in
                             Button { resume(d) } label: {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(d.title.isEmpty ? d.defaultTitle(store.snapshot) : d.title).font(Theme.body.weight(.semibold))
+                                    Text([d.title.isEmpty ? d.defaultTitle(store.snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")).font(Theme.body.weight(.semibold))
                                     Text(progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
