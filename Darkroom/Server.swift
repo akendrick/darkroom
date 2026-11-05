@@ -63,6 +63,22 @@ struct Server {
         return try await send(r)
     }
 
+    /// A file (the process PDF), not the API's JSON.
+    func data(_ path: String) async throws -> Data {
+        var r = URLRequest(url: URL(string: path, relativeTo: base)!)
+        r.timeoutInterval = 60
+        if let key { r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        let data: Data, resp: URLResponse
+        do { (data, resp) = try await Self.session.data(for: r) }
+        catch { throw ServerError(message: "No connection to knotwork.ca", status: 0) }
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200, data.starts(with: Data("%PDF".utf8)) else {
+            let j = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
+            throw ServerError(message: j["error"].string ?? "Server error (\(status))", status: status == 200 ? 400 : status)
+        }
+        return data
+    }
+
     /// The API's photo upload (multipart, field "image").
     func upload(jpeg: Data, photoId: Int) async throws -> JSON {
         let boundary = "kw-\(UUID().uuidString)"

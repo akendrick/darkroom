@@ -30,6 +30,11 @@ final class Walks {
         guard let snap = store.snapshot else { return }
         let lastPreset = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
         guard let p = snap.preset(lastPreset) ?? snap.presets.first(where: \.isDefault) ?? snap.presets.first else { return }
+        start(preset: p, left: left)
+    }
+
+    /// A new print on this walk-through.
+    func start(preset p: Preset, left: Bool = false) {
         let d = PrintDraft(typeId: p.photoTypeId, presetId: p.id)
         store.update(d)
         show(d, left: left)

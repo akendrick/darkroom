@@ -63,6 +63,9 @@ struct HomeView: View {
     @State private var confirmSignOut = false
     @State private var editing = false
     @State private var settings = false
+    /// Which of the two start buttons is open; kept between launches.
+    @AppStorage("homeOpen") private var openPart = "walk"
+    @State private var openType: Int?
 
     private var open: [PrintDraft] {
         store.drafts.values.filter { !$0.finished }.sorted { $0.updatedAt > $1.updatedAt }
@@ -74,6 +77,9 @@ struct HomeView: View {
                 .background(Theme.bg)
                 .refreshable { await store.refresh() }
                 .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: ProcessRoute.self) { r in
+                    if let n = r.section { SectionPager(id: r.id, index: n) } else { ProcessView(id: r.id) }
+                }
         }
         .tint(Theme.red)
         #if DEBUG
@@ -101,7 +107,7 @@ struct HomeView: View {
         }
     }
 
-    /// Start, then the prints, then any still in progress.
+    /// The two start buttons, then the prints, then any still in progress.
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -120,9 +126,10 @@ struct HomeView: View {
             }
             statusLine
 
-            Button("▶ Start walk-through") { walks.start() }
-                .buttonStyle(NextButtonStyle())
-                .disabled(store.snapshot?.presets.isEmpty ?? true)
+            part("walk", "WALKTHROUGH")
+            if openPart == "walk" { walkthroughs }
+            part("proc", "PROCESSES")
+            if openPart == "proc" { ProcessesList().padding(.leading, 8) }
 
             PrintsGrid(reload: store.snapshot?.fetchedAt).padding(.top, 8)
 
@@ -140,6 +147,61 @@ struct HomeView: View {
                         .buttonStyle(WalkButtonStyle())
                     }
                 }
+            }
+        }
+    }
+
+    private func part(_ key: String, _ title: String) -> some View {
+        Button { withAnimation(.snappy) { openPart = openPart == key ? "" : key } } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Image(systemName: openPart == key ? "chevron.down" : "chevron.right").font(.system(size: 24, weight: .heavy))
+            }
+            .padding(.horizontal, 20)
+        }
+        .buttonStyle(NextButtonStyle())
+    }
+
+    /// Each kind of print with its walk-throughs: tap one, then Begin.
+    private var walkthroughs: some View {
+        VStack(spacing: 10) {
+            ForEach(store.snapshot?.photoTypes ?? []) { t in
+                let ps = (store.snapshot?.presets ?? []).filter { $0.photoTypeId == t.id }
+                    .sorted { $0.isDefault && !$1.isDefault }
+                if !ps.isEmpty {
+                    Button { withAnimation(.snappy) { openType = openType == t.id ? nil : t.id } } label: {
+                        HStack {
+                            Text(t.name).font(Theme.body.weight(.bold))
+                            Spacer()
+                            Image(systemName: openType == t.id ? "chevron.down" : "chevron.right").font(.body.weight(.bold))
+                        }
+                    }
+                    .buttonStyle(WalkButtonStyle(on: openType == t.id))
+                    if openType == t.id {
+                        VStack(spacing: 8) {
+                            ForEach(ps) { p in
+                                Button { walks.start(preset: p) } label: {
+                                    VStack(spacing: 2) {
+                                        Text("▶ Begin walkthrough")
+                                        if ps.count > 1 { Text(p.name).font(Theme.small) }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(NextButtonStyle(compact: true))
+                            }
+                        }
+                        .padding(.leading, 16)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 8)
+        .onAppear {
+            // Open on the kind the last print was.
+            if openType == nil, let snap = store.snapshot {
+                let last = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
+                openType = snap.preset(last)?.photoTypeId ?? snap.presets.first(where: \.isDefault)?.photoTypeId
             }
         }
     }
