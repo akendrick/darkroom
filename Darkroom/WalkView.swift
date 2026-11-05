@@ -40,8 +40,6 @@ struct WalkView: View {
         }
         .background(Theme.bg.ignoresSafeArea())
         .foregroundStyle(Theme.red)
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }       // screen stays on
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .onChange(of: model.draft.page) { model.status = nil }
     }
 
@@ -422,9 +420,10 @@ struct TempWheel: View {
 
 // MARK: Menu
 
-/// Save, exit, discard, and the other sections of the app.
+/// Save, exit, discard, multi-print, and the other sections of the app.
 struct WalkMenu: View {
     @Bindable var model: WalkModel
+    @Environment(Walks.self) private var walks
     @State private var editing = false
     @State private var settings = false
     @State private var confirmDiscard = false
@@ -434,6 +433,13 @@ struct WalkMenu: View {
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
             Button("Edit walk-through steps", systemImage: "list.number") { editing = true }
             Button("Settings", systemImage: "gearshape") { settings = true }
+            Divider()
+            // Another print alongside this one, the phone turned sideways.
+            if !walks.multi {
+                Button("Multi-print", systemImage: "rectangle.split.2x1") { walks.split() }
+            } else if walks.open.count == 1 {
+                Button("One print", systemImage: "rectangle") { walks.single() }
+            }
             Divider()
             Button("Discard print", systemImage: "trash", role: .destructive) { confirmDiscard = true }
         } label: {

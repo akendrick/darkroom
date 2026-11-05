@@ -3,10 +3,15 @@ import UserNotifications
 
 @main
 struct DarkroomApp: App {
-    @State private var store = AppStore()
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
+    @State private var store: AppStore
+    @State private var walks: Walks
     @Environment(\.scenePhase) private var phase
 
     init() {
+        let s = AppStore()
+        _store = State(initialValue: s)
+        _walks = State(initialValue: Walks(store: s))
         PhoneWatch.shared.activate()
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
     }
@@ -15,6 +20,7 @@ struct DarkroomApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
+                .environment(walks)
                 .preferredColorScheme(Look.shared.darkroom ? .dark : .light)
                 .task {
                     _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])

@@ -16,4 +16,8 @@ struct StepActivity: ActivityAttributes {
         var still: String?
     }
     var print: String
+    /// Which walk-through on the phone (its print's client id); one activity each.
+    var key: String?
+    /// The left print in multi-print: shown black on red to tell the two apart.
+    var inverted: Bool?
 }

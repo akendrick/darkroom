@@ -7,12 +7,14 @@ struct DarkroomLive: WidgetBundle {
     var body: some Widget { StepTimerLive() }
 }
 
-/// Red on black whatever the phone's look, so it's safe under the safelight.
+/// Red on black whatever the phone's look, so it's safe under the safelight;
+/// black on red for the left print in multi-print.
 private let red = Color(red: 1, green: 0.165, blue: 0.102)
 
 struct StepTimerLive: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: StepActivity.self) { ctx in
+            let inv = ctx.attributes.inverted == true
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ctx.state.step.uppercased()).font(.system(size: 22, weight: .heavy).width(.condensed)).lineLimit(1)
@@ -22,10 +24,10 @@ struct StepTimerLive: Widget {
                 TimeText(state: ctx.state)
                     .font(.system(size: 52, weight: .heavy).width(.compressed)).monospacedDigit()
             }
-            .foregroundStyle(red)
+            .foregroundStyle(inv ? .black : red)
             .padding(.horizontal, 18).padding(.vertical, 14)
-            .activityBackgroundTint(.black)
-            .activitySystemActionForegroundColor(red)
+            .activityBackgroundTint(inv ? red : .black)
+            .activitySystemActionForegroundColor(inv ? .black : red)
         } dynamicIsland: { ctx in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {

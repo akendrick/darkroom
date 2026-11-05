@@ -59,7 +59,7 @@ struct SignInView: View {
 
 struct HomeView: View {
     @Environment(AppStore.self) private var store
-    @State private var walk: WalkModel?
+    @Environment(Walks.self) private var walks
     @State private var confirmSignOut = false
     @State private var editing = false
     @State private var settings = false
@@ -78,16 +78,20 @@ struct HomeView: View {
         .tint(Theme.red)
         #if DEBUG
         // Test runs: open a walk-through at its first timed step, with the first
-        // negative and tissue chosen. Debug builds only.
+        // negative and tissue chosen; with DARKROOM_TEST_MULTI, two side by side.
+        // Debug builds only.
         .task(id: store.snapshot?.fetchedAt) {
-            guard ProcessInfo.processInfo.environment["DARKROOM_TEST_WALK"] != nil, walk == nil, store.snapshot != nil else { return }
-            start()
-            guard let m = walk else { return }
-            for what in SelectWhat.allCases { if let first = store.items(what).first { m.draft.layers[0][what.layerField] = first.id } }
-            if let i = m.pages.firstIndex(where: { $0.step.map { !$0.isSelect } ?? false }) { m.draft.page = i }
+            let env = ProcessInfo.processInfo.environment
+            guard env["DARKROOM_TEST_WALK"] != nil, !walks.isOpen, store.snapshot != nil else { return }
+            walks.start()
+            if env["DARKROOM_TEST_MULTI"] != nil { walks.split(); walks.start(left: true) }
+            for m in walks.open {
+                for what in SelectWhat.allCases { if let first = store.items(what).first { m.draft.layers[0][what.layerField] = first.id } }
+                if let i = m.pages.firstIndex(where: { $0.step.map { !$0.isSelect } ?? false }) { m.draft.page = i }
+            }
         }
         #endif
-        .fullScreenCover(item: $walk) { m in WalkView(model: m) }
+        .fullScreenCover(isPresented: Binding(get: { walks.isOpen }, set: { _ in })) { WalkHost() }
         .sheet(isPresented: $editing) { EditWalksView() }
         .sheet(isPresented: $settings) { SettingsView() }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
@@ -116,7 +120,7 @@ struct HomeView: View {
             }
             statusLine
 
-            Button("▶ Start walk-through") { start() }
+            Button("▶ Start walk-through") { walks.start() }
                 .buttonStyle(NextButtonStyle())
                 .disabled(store.snapshot?.presets.isEmpty ?? true)
 
@@ -126,10 +130,10 @@ struct HomeView: View {
                 Text("IN PROGRESS").font(Theme.label).tracking(2).foregroundStyle(Theme.dim).padding(.top, 8)
                 VStack(spacing: 10) {
                     ForEach(open) { d in
-                        Button { resume(d) } label: {
+                        Button { walks.resume(d) } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text([d.title.isEmpty ? d.defaultTitle(store.snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")).font(Theme.body.weight(.semibold))
-                                Text(progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
+                                Text(store.name(d)).font(Theme.body.weight(.semibold))
+                                Text(store.progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -149,39 +153,4 @@ struct HomeView: View {
         return Text(parts.isEmpty ? (store.syncing ? "Syncing…" : " ") : parts.joined(separator: " · "))
             .font(Theme.small).foregroundStyle(Theme.dim)
     }
-
-    private func progress(_ d: PrintDraft) -> String {
-        let pages = d.pages(store.snapshot?.preset(d.presetId))
-        let steps = pages.filter { $0.step != nil }
-        let done = steps.filter { d.isDone($0) }.count
-        let send = d.unsent || d.pendingImage != nil ? " · not sent yet" : ""
-        return "\(done) of \(steps.count) steps\(d.photoId.map { " · print #\($0)" } ?? "")\(send)"
-    }
-
-    /// Starts with the preset the last print used, else the default one.
-    private func start() {
-        guard let snap = store.snapshot else { return }
-        let lastPreset = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
-        guard let p = snap.preset(lastPreset) ?? snap.presets.first(where: \.isDefault) ?? snap.presets.first else { return }
-        let d = PrintDraft(typeId: p.photoTypeId, presetId: p.id)
-        store.update(d)
-        show(d)
-    }
-
-    /// Carries on at the first page not done yet.
-    private func resume(_ d: PrintDraft) {
-        var d = d
-        let pages = d.pages(store.snapshot?.preset(d.presetId))
-        if d.page == 0, let i = pages.indices.dropFirst().first(where: { !d.isDone(pages[$0]) }) { d.page = i }
-        show(d)
-    }
-
-    private func show(_ d: PrintDraft) {
-        let m = WalkModel(store: store, draft: d)
-        m.onClose = { walk = nil }
-        PhoneWatch.shared.onCommand = { [weak m] cmd, page in m?.handle(cmd, on: page) }
-        walk = m
-    }
 }
-
-extension WalkModel: Identifiable { nonisolated var id: ObjectIdentifier { ObjectIdentifier(self) } }

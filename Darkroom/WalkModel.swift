@@ -23,9 +23,19 @@ final class WalkModel {
 
     var onClose: (() -> Void)?
 
-    init(store: AppStore, draft: PrintDraft) {
+    /// Which half of the screen in multi-print; nil with one print. The left
+    /// one is shown, and alerts, black on red.
+    enum Side { case left, right }
+    var side: Side? {
+        didSet { if side != oldValue { pushWatch(); scheduleAlarm() } }
+    }
+    /// "LEFT" or "RIGHT" in multi-print, so an alert says which print it's for.
+    var sideName: String? { side.map { $0 == .left ? "LEFT" : "RIGHT" } }
+
+    init(store: AppStore, draft: PrintDraft, side: Side? = nil) {
         self.store = store
         self.clientId = draft.clientId
+        self.side = side
         self.last = draft
         if store.drafts[clientId] == nil { store.update(draft) }
         if self.draft.page >= pages.count { self.draft.page = pages.count - 1 }
@@ -187,18 +197,21 @@ final class WalkModel {
     /// AlarmKit's, or a notification where that isn't allowed.
     private func scheduleAlarm() {
         let c = UNUserNotificationCenter.current()
-        c.removePendingNotificationRequests(withIdentifiers: ["step-timer"])
+        c.removePendingNotificationRequests(withIdentifiers: [notificationId])
         let end = rec.timer.endsAt.flatMap { $0 > .now ? $0 : nil }
-        StepAlarm.shared.set(end, title: page.step.map { "\($0.name) — time" } ?? "Time")
+        let title = [sideName, page.step.map { "\($0.name) — time" } ?? "Time"].compactMap { $0 }.joined(separator: " · ")
+        StepAlarm.shared.set(clientId, end, title: title)
         guard !StepAlarm.shared.usable, let end, let s = page.step else { return }
         let n = UNMutableNotificationContent()
-        n.title = "\(s.name) — time"
+        n.title = title
         n.body = s.tray.map { "Tray \($0)" } ?? "Next step on the phone"
         n.sound = .default
         n.interruptionLevel = .timeSensitive
         let t = UNTimeIntervalNotificationTrigger(timeInterval: end.timeIntervalSinceNow, repeats: false)
-        c.add(UNNotificationRequest(identifier: "step-timer", content: n, trigger: t))
+        c.add(UNNotificationRequest(identifier: notificationId, content: n, trigger: t))
     }
+
+    private var notificationId: String { "step-timer-\(clientId)" }
 
     // MARK: Moving between pages
 
@@ -273,10 +286,11 @@ final class WalkModel {
 
     private func close() {
         alarmTask?.cancel()
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["step-timer"])
-        StepAlarm.shared.set(nil, title: "")
+        // "step-timer" is from before multi-print.
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationId, "step-timer"])
+        StepAlarm.shared.set(clientId, nil, title: "")
         PhoneWatch.shared.send(.idle)
-        LiveTimer.shared.end()
+        LiveTimer.shared.end(key: clientId)
         onClose?()
     }
 
@@ -286,11 +300,13 @@ final class WalkModel {
         let s = page.step
         // The Watch keeps to the essentials: no tray.
         let meta = (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" } ?? ""
-        let title: String = switch page {
+        var title: String = switch page {
         case .start: "New print"
         case .finish: "Finish"
         case .step(let st, _): st.name
         }
+        // Multi-print: the Watch shows the print last changed, so say which.
+        if let side { title = (side == .left ? "L · " : "R · ") + title }
         // A choice still to make on the phone: the Watch's Next waits for it.
         let canNext = !(s?.isSelect == true && s?.selectWhat.map { chosen($0) == nil } == true)
         PhoneWatch.shared.send(WatchScreen(
@@ -312,7 +328,9 @@ final class WalkModel {
                 state.still = t.display().text
             }
         }
-        LiveTimer.shared.show(print: draft.title.isEmpty ? "Print" : draft.title, state)
+        let name = draft.title.isEmpty ? "Print" : draft.title
+        LiveTimer.shared.show(key: clientId, print: [sideName, name].compactMap { $0 }.joined(separator: " · "),
+                              inverted: side == .left, state)
     }
 
     var pageKey: String { "\(clientId)#\(draft.page)" }

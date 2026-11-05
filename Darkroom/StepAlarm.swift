@@ -1,14 +1,14 @@
 import AlarmKit
 import SwiftUI
 
-/// The running step's alarm, through AlarmKit: it rings like the Clock app's
-/// timer — on the lock screen, through silent mode and Focus — until stopped.
-/// When AlarmKit isn't allowed the walk-through falls back to a notification.
+/// Each open print's step alarm, through AlarmKit: it rings like the Clock
+/// app's timer — on the lock screen, through silent mode and Focus — until
+/// stopped. When AlarmKit isn't allowed the walk-through falls back to a
+/// notification.
 @MainActor
 final class StepAlarm {
     static let shared = StepAlarm()
-    private var id: UUID?
-    private var end: Date?
+    private var alarms: [String: (id: UUID, end: Date, title: String)] = [:]
 
     struct Meta: AlarmMetadata {}
 
@@ -20,13 +20,13 @@ final class StepAlarm {
         }
     }
 
-    /// The one alarm, at `end`; nil takes it away (and stops it if it's ringing).
-    func set(_ end: Date?, title: String) {
-        guard end != self.end else { return }
-        self.end = end
-        if let old = id { try? AlarmManager.shared.cancel(id: old); id = nil }
+    /// The print's one alarm (`key` is its client id), at `end`; nil takes it
+    /// away (and stops it if it's ringing).
+    func set(_ key: String, _ end: Date?, title: String) {
+        guard end != alarms[key]?.end || title != alarms[key]?.title else { return }
+        if let old = alarms.removeValue(forKey: key) { try? AlarmManager.shared.cancel(id: old.id) }
         guard let end, usable else { return }
-        let new = UUID(); id = new
+        let new = UUID(); alarms[key] = (new, end, title)
         let alert = AlarmPresentation.Alert(
             title: LocalizedStringResource(stringLiteral: title),
             stopButton: AlarmButton(text: "Stop", textColor: .white, systemImageName: "stop.fill"))
