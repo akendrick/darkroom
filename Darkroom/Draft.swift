@@ -7,6 +7,7 @@ struct StepRecord: Codable, Equatable {
     var temp: Double?
     var ph: Double?
     var chemistryId: Int?
+    var materialId: Int?        // one of the owner's own kinds; below 0 = added on the phone, not sent yet
     var notes: String?
     var startedAt: String?      // local "YYYY-MM-DD HH:MM:SS"
     var seconds: Int?           // fixed on Next
@@ -69,6 +70,7 @@ extension PrintDraft {
 
     func isDone(_ page: WalkPage) -> Bool {
         guard case .step(let s, let layer) = page else { return page == .start }
+        if s.isSelect, s.materialKindId != nil { return recs[Self.key(s, layer: layer)]?.materialId != nil }
         if s.isSelect {
             guard let f = s.selectWhat?.layerField else { return true }
             return layers[max(layer, 1) - 1][f] != nil
@@ -89,11 +91,14 @@ extension PrintDraft {
     func payload(_ snap: Snapshot?, ids: [Int: Int]) -> JSON? {
         var steps: [JSON] = []
         for page in pages(snap?.preset(presetId)) {
-            guard case .step(let s, let layer) = page, !s.isSelect,
+            // A choice of the owner's own kind of material is kept on its step.
+            guard case .step(let s, let layer) = page, !s.isSelect || s.materialKindId != nil,
                   let r = recs[Self.key(s, layer: layer)], r.done else { continue }
+            var material = r.materialId
+            if let m = material, m < 0 { guard let real = ids[m] else { return nil }; material = real }
             steps.append(.object([
                 "process_step_id": .from(s.id), "layer_no": .from(layer), "name": .string(s.name),
-                "kind": .string(s.kind), "tray": .from(s.tray), "chemistry_id": .from(r.chemistryId),
+                "kind": .string(s.kind), "tray": .from(s.tray), "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
                 "temp": .from(r.temp), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
@@ -136,7 +141,7 @@ extension PrintDraft {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.ph = s["ph"].double
-            r.chemistryId = s["chemistry_id"].int; r.notes = s["notes"].string; r.startedAt = s["started_at"].string
+            r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string; r.startedAt = s["started_at"].string
             r.skipped = s["skipped"].flag; r.done = true
             recs["\(sid):\(s["layer_no"].int ?? 0)"] = r
         }

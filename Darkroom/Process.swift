@@ -259,6 +259,7 @@ struct ProcessView: View {
             }
             .sheet(isPresented: $editing) { ProcessEditor(doc: p) }
             .quickLookPreview($pdf)
+            .homeBulb()
         } else {
             Text("This process is no longer on the server.").font(Theme.small).foregroundStyle(Theme.dim)
         }
@@ -300,6 +301,7 @@ struct SectionPager: View {
             }
             .sheet(isPresented: $editing) { ProcessEditor(doc: p, startOn: p.sections[i].key) }
             .quickLookPreview($pdf)
+            .homeBulb()
         } else {
             Text("This section is no longer on the server.").font(Theme.small).foregroundStyle(Theme.dim)
         }

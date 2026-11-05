@@ -40,6 +40,9 @@ final class Walks {
         show(d, left: left)
     }
 
+    /// Back to the start page: every print open is saved and stays in progress.
+    func home() { for m in open { m.saveAndExit() } }
+
     /// Carries on at the first page not done yet.
     func resume(_ d: PrintDraft, left: Bool = false) {
         var d = d

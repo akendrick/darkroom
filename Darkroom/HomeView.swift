@@ -66,13 +66,14 @@ struct HomeView: View {
     /// Which of the two start buttons is open; kept between launches.
     @AppStorage("homeOpen") private var openPart = "walk"
     @State private var openType: Int?
+    @State private var path = NavigationPath()
 
     private var open: [PrintDraft] {
         store.drafts.values.filter { !$0.finished }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView { content.padding(20) }
                 .background(Theme.bg)
                 .refreshable { await store.refresh() }
@@ -80,7 +81,9 @@ struct HomeView: View {
                 .navigationDestination(for: ProcessRoute.self) { r in
                     if let n = r.section { SectionPager(id: r.id, index: n) } else { ProcessView(id: r.id) }
                 }
+                .navigationDestination(for: ListSpec.self) { RowsView(spec: $0) }
         }
+        .environment(\.goHome) { path = NavigationPath(); editing = false; settings = false }
         .tint(Theme.red)
         #if DEBUG
         // Test runs: open a walk-through at its first timed step, with the first
@@ -130,6 +133,14 @@ struct HomeView: View {
             if openPart == "walk" { walkthroughs }
             part("proc", "PROCESSES")
             if openPart == "proc" { ProcessesList().padding(.leading, 8) }
+            part("chem", "CHEMISTRY")
+            if openPart == "chem" { lists([.of("chemistry"), .of("chemistry_types")]) }
+            part("mat", "MATERIALS")
+            if openPart == "mat" {
+                lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
+                      + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
+                      + [.materialKinds])
+            }
 
             PrintsGrid(reload: store.snapshot?.fetchedAt).padding(.top, 8)
 
@@ -161,6 +172,24 @@ struct HomeView: View {
             .padding(.horizontal, 20)
         }
         .buttonStyle(NextButtonStyle())
+    }
+
+    /// Lists to open and edit; each one is also chosen from in the walk-throughs.
+    private func lists(_ specs: [ListSpec]) -> some View {
+        VStack(spacing: 10) {
+            ForEach(specs) { spec in
+                NavigationLink(value: spec) {
+                    HStack {
+                        Text(spec.id == "material_kind" ? "+ Kinds of material" : spec.title).font(Theme.body.weight(.bold))
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.body.weight(.bold))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(WalkButtonStyle())
+            }
+        }
+        .padding(.leading, 8)
     }
 
     /// Each kind of print with its walk-throughs: tap one, then Begin.

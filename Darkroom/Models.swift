@@ -14,6 +14,12 @@ struct Snapshot: Codable, Equatable {
     var chemistryTypes: [(id: Int, name: String)] {
         raw["chemistry_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
     }
+    var materialKinds: [MaterialKind] { raw["material_kinds"].array.map(MaterialKind.init).filter { !$0.archived } }
+    /// Materials of a kind made by the owner ("Photo Paper").
+    func materials(_ kind: Int) -> [Material] {
+        raw["materials"].array.filter { $0["kind_id"].int == kind && !$0["archived"].flag }.map(Material.init(generic:))
+    }
+    func kindName(_ id: Int?) -> String? { materialKinds.first { $0.id == id }?.name }
     var inProgress: [JSON] { raw["in_progress"].array }
     var recent: [JSON] { raw["recent"].array }
 
@@ -22,6 +28,12 @@ struct Snapshot: Codable, Equatable {
     }
     func preset(_ id: Int?) -> Preset? { presets.first { $0.id == id } }
     func typeName(_ id: Int?) -> String { photoTypes.first { $0.id == id }?.name ?? "Print" }
+}
+
+/// A kind of material the owner made ("Photo Paper"), with its own list.
+struct MaterialKind: Identifiable, Equatable, Hashable {
+    let id: Int, name: String, archived: Bool
+    init(_ j: JSON) { id = j["id"].int ?? 0; name = j["name"].string ?? "Material"; archived = j["archived"].flag }
 }
 
 struct PhotoType: Identifiable, Equatable {
@@ -40,6 +52,10 @@ struct Preset: Identifiable, Equatable {
 
 struct Step: Identifiable, Equatable, Hashable {
     let id: Int, name: String, kind: String, selectWhat: SelectWhat?, perLayer: Bool, asksTemp: Bool
+    /// Chooses one of this kind of material (the owner's own kinds).
+    let materialKindId: Int?
+    /// Off: no timer, just "do this, then Next".
+    let timed: Bool
     let tray: Int?, chemistryTypeId: Int?, defaultSeconds: Int?, minSeconds: Int?, maxSeconds: Int?
     let defaultTemp: Double?, optional: Bool, recordsPh: Bool, lightsOkAfter: Bool
     let notes: String?, sameAsStepId: Int?, archived: Bool
@@ -47,6 +63,8 @@ struct Step: Identifiable, Equatable, Hashable {
     init(_ j: JSON) {
         id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
         selectWhat = j["select_what"].string.flatMap(SelectWhat.init(rawValue:))
+        materialKindId = j["material_kind_id"].int
+        timed = j["timed"] == .null ? true : j["timed"].flag
         perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
         chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
@@ -56,6 +74,8 @@ struct Step: Identifiable, Equatable, Hashable {
 
     var isSelect: Bool { kind == "select" }
     var isExposure: Bool { kind == "exposure" }
+    /// A page with a timer: not a choice, and not a "do this, then Next" step.
+    var hasTimer: Bool { !isSelect && timed }
 }
 
 /// What a "Select a material" step chooses, and the print layer field it fills.
@@ -77,6 +97,13 @@ struct Material: Identifiable, Equatable {
     let id: Int, label: String, sub: String?, archived: Bool
 
     init(id: Int, label: String, sub: String?) { self.id = id; self.label = label; self.sub = sub; archived = false }
+
+    /// One of the owner's own kinds: its name, then maker and notes.
+    init(generic j: JSON) {
+        id = j["id"].int ?? 0; archived = j["archived"].flag; label = j["label"].string ?? "#\(id)"
+        let s = [j["maker"].string, j["notes"].string].compactMap { $0 }.joined(separator: " · ")
+        sub = s.isEmpty ? nil : s
+    }
 
     init(what: SelectWhat, row j: JSON) {
         id = j["id"].int ?? 0; archived = j["archived"].flag

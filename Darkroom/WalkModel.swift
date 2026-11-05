@@ -99,6 +99,28 @@ final class WalkModel {
         draft = d
     }
 
+    /// A choose page with nothing chosen yet: Next waits for it.
+    var choiceMissing: Bool {
+        guard let s = page.step, s.isSelect else { return false }
+        if s.materialKindId != nil { return rec.materialId == nil }
+        return s.selectWhat.map { chosen($0) == nil } ?? false
+    }
+
+    /// One of the owner's own kinds of material. On a choose page that's the
+    /// page done; on a timed page Next still finishes it.
+    func pickMaterial(_ id: Int?) {
+        var r = rec
+        r.materialId = id
+        if page.step?.isSelect == true { r.done = id != nil; if r.startedAt == nil { r.startedAt = Clock.stamp() } }
+        rec = r
+    }
+
+    func addMaterial(kind: Int, name: String, maker: String?) {
+        let m = store.addMaterial(kind: kind, name: name, maker: maker)
+        pickMaterial(m.id)
+        status = "Added \(name)"
+    }
+
     func addMaterial(_ what: SelectWhat, name: String, paperId: Int?) {
         let m = store.addMaterial(what, name: name, paperId: paperId)
         pick(what, m.id)
@@ -221,7 +243,7 @@ final class WalkModel {
         if let s = page.step, !s.isSelect {
             var r = rec
             r.timer.pause()
-            r.seconds = r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
+            r.seconds = !s.timed ? nil : r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
             if r.startedAt == nil { r.startedAt = Clock.stamp() }
             r.skipped = false; r.done = true
             rec = r
@@ -308,10 +330,10 @@ final class WalkModel {
         // Multi-print: the Watch shows the print last changed, so say which.
         if let side { title = (side == .left ? "L · " : "R · ") + title }
         // A choice still to make on the phone: the Watch's Next waits for it.
-        let canNext = !(s?.isSelect == true && s?.selectWhat.map { chosen($0) == nil } == true)
+        let canNext = !choiceMissing
         PhoneWatch.shared.send(WatchScreen(
             active: true, title: title, step: stepPages.contains(page) ? header.replacingOccurrences(of: "Step ", with: "") : "", detail: meta,
-            hasTimer: s.map { !$0.isSelect } ?? false, timer: rec.timer,
+            hasTimer: s?.hasTimer ?? false, timer: rec.timer,
             canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", pageKey: pageKey, sentAt: .now))
         pushLive(title: title, meta: meta)
     }
@@ -319,7 +341,7 @@ final class WalkModel {
     /// The same step and timer on the lock screen.
     private func pushLive(title: String, meta: String) {
         var state = StepActivity.ContentState(step: title, detail: header)
-        if let s = page.step, !s.isSelect {
+        if let s = page.step, s.hasTimer {
             let t = rec.timer
             state.detail = [header, s.tray.map { "Tray \($0)" }, meta.isEmpty ? nil : meta].compactMap { $0 }.joined(separator: " · ")
             if let start = t.startedAt {
@@ -340,10 +362,10 @@ final class WalkModel {
         guard pressedOn == pageKey else { pushWatch(); return }
         switch cmd {
         case .next:
-            if let s = page.step, s.isSelect, let w = s.selectWhat, chosen(w) == nil { status = "Choose on the phone first"; pushWatch(); return }
+            if choiceMissing { status = "Choose on the phone first"; pushWatch(); return }
             next()
-        case .pause: if page.step.map({ !$0.isSelect }) ?? false { startPause() }
-        case .restart: if page.step.map({ !$0.isSelect }) ?? false { reset(); startPause() }
+        case .pause: if page.step?.hasTimer == true { startPause() }
+        case .restart: if page.step?.hasTimer == true { reset(); startPause() }
         }
     }
 }

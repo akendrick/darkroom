@@ -6,7 +6,8 @@ import UIKit
 /// A negative, tissue or support paper added on the phone, waiting to be sent.
 struct PendingMaterial: Codable, Equatable {
     var tempId: Int             // below 0, used in drafts until the server gives a real id
-    var what: SelectWhat
+    var what: SelectWhat?       // nil: one of the owner's own kinds (kindId)
+    var kindId: Int?
     var body: JSON
     var label: String
 }
@@ -133,6 +134,22 @@ final class AppStore {
         return Material(id: temp, label: name, sub: "added on this phone")
     }
 
+    /// One of the owner's own kinds ("Photo Paper"), queued like the others.
+    func addMaterial(kind: Int, name: String, maker: String?) -> Material {
+        let temp = -Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000 - 1
+        let body: JSON = .object(["kind_id": .from(kind), "label": .string(name), "maker": .from(maker)])
+        pendingMaterials.append(PendingMaterial(tempId: temp, what: nil, kindId: kind, body: body, label: name))
+        save(); flush()
+        return Material(id: temp, label: name, sub: "added on this phone")
+    }
+
+    /// Server materials of one of the owner's kinds, plus any added here and not yet sent.
+    func items(kind: Int) -> [Material] {
+        let local = pendingMaterials.filter { $0.kindId == kind }
+            .map { Material(id: $0.tempId, label: $0.label, sub: "added on this phone — sends when online") }
+        return local.reversed() + (snapshot?.materials(kind) ?? [])
+    }
+
     /// A chemistry batch mixed now, made on the server straight away (a print's
     /// steps point at it, so it isn't queued like a material).
     func addBatch(label: String, typeId: Int, percent: Double?, volume: Double?) async throws -> Int {
@@ -147,7 +164,7 @@ final class AppStore {
 
     /// Server materials plus any added on this phone and not yet sent.
     func items(_ what: SelectWhat) -> [Material] {
-        let local = pendingMaterials.filter { $0.what == what }
+        let local = pendingMaterials.filter { $0.what == what && $0.kindId == nil }
             .map { Material(id: $0.tempId, label: $0.label, sub: "added on this phone — sends when online") }
         let server = (snapshot?.items(what) ?? []).sorted { $0.id > $1.id }
         return local.reversed() + server
@@ -196,13 +213,14 @@ final class AppStore {
         // 1. Materials added on the phone, so prints can point at them.
         while let m = pendingMaterials.first {
             let r: JSON
-            do { r = try await server.request("darkroom-api.php?res=\(m.what.resource)", method: "POST", body: m.body) }
+            do { r = try await server.request("darkroom-api.php?res=\(m.what?.resource ?? "material")", method: "POST", body: m.body) }
             catch let e as ServerError where !e.retry && !e.signedOut {
                 // Refused for good (a support paper with no base paper, say): let it
                 // go so it doesn't hold up everything behind it, and unchoose it.
                 pendingMaterials.removeFirst()
                 for (k, var d) in drafts {
                     d.layers = d.layers.map { $0.filter { $0.value != m.tempId } }
+                    for (rk, r) in d.recs where r.materialId == m.tempId { d.recs[rk]?.materialId = nil }
                     drafts[k] = d
                 }
                 refused = "\(m.label) not added: \(e.message)"
@@ -215,6 +233,7 @@ final class AppStore {
             // Point every draft at the real id now that the server has it.
             for (k, var d) in drafts {
                 d.layers = d.layers.map { $0.mapValues { $0 == m.tempId ? id : $0 } }
+                for (rk, r) in d.recs where r.materialId == m.tempId { d.recs[rk]?.materialId = id }
                 drafts[k] = d
             }
             listsChanged = true

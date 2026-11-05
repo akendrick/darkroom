@@ -8,6 +8,8 @@ struct StepEdit: Identifiable, Equatable {
     var name = "New step"
     var kind = "bath"
     var selectWhat: String?     // kept as the server's text: it may name things this app doesn't list yet
+    var materialKindId: Int?    // or one of the owner's own kinds of material
+    var timed = true            // off: no timer, "do this, then Next"
     var perLayer = false
     var asksTemp = false
     var tray: Int?
@@ -28,6 +30,7 @@ struct StepEdit: Identifiable, Equatable {
     init(_ j: JSON) {
         serverId = j["id"].int; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
         selectWhat = j["select_what"].string
+        materialKindId = j["material_kind_id"].int; timed = j["timed"] == .null ? true : j["timed"].flag
         perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
         chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
@@ -40,7 +43,8 @@ struct StepEdit: Identifiable, Equatable {
     func payload(sameAsIndex: Int?) -> JSON {
         .object([
             "id": .from(serverId), "name": .string(name), "kind": .string(kind),
-            "select_what": .from(selectWhat),     // any step can also choose a material
+            "select_what": .from(materialKindId == nil ? selectWhat : nil),     // any step can also choose a material
+            "material_kind_id": .from(materialKindId), "timed": .from(timed ? 1 : 0),
             "per_layer": .from(perLayer ? 1 : 0), "asks_temp": .from(asksTemp ? 1 : 0), "tray": .from(tray),
             "chemistry_type_id": .from(isSelect ? nil : chemistryTypeId),
             "default_seconds": .from(defaultSeconds), "min_seconds": .from(minSeconds), "max_seconds": .from(maxSeconds),
@@ -232,10 +236,13 @@ struct PresetStepsView: View {
     }
 
     private func summary(_ s: StepEdit) -> String {
-        if s.isSelect { return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…") }
+        if s.isSelect {
+            if let k = s.materialKindId { return "Choose " + (store.snapshot?.kindName(k)?.lowercased() ?? "material") }
+            return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
+        }
         let kind = store.snapshot?.stepKinds.first { $0["code"].string == s.kind }?["name"].string ?? s.kind
         return [kind, s.defaultSeconds.map(Duration.format), s.tray.map { "tray \($0)" },
-                s.defaultTemp.map { "\($0.formatted()) °C" }, s.optional ? "optional" : nil, s.perLayer ? "per layer" : nil]
+                s.defaultTemp.map { "\($0.formatted()) °C" }, s.timed ? nil : "no timer", s.optional ? "optional" : nil, s.perLayer ? "per layer" : nil]
             .compactMap { $0 }.joined(separator: " · ")
     }
 
@@ -282,20 +289,27 @@ struct StepForm: View {
                 // A choose step is only the list; any other step can also choose
                 // one (the support paper on "Soak final support", say).
                 Field(label: step.isSelect ? "Choose" : "Also choose") {
-                    Picker("Choose", selection: $step.selectWhat) {
+                    // The built-in lists, then the owner's own kinds ("mk:3").
+                    Picker("Choose", selection: choice) {
                         Text("—").tag(String?.none)
                         ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
-                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil {
+                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil, step.materialKindId == nil {
                             Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
                         }
+                        ForEach(store.snapshot?.materialKinds ?? []) { Text($0.name).tag(Optional("mk:\($0.id)")) }
                     }.pickerStyle(.menu).labelsHidden()
                 }
                 if !step.isSelect {
+                    Toggle("Timer (off: do it, then Next)", isOn: $step.timed).font(Theme.body.weight(.semibold)).tint(Theme.red)
+                }
+                if !step.isSelect && step.timed {
                     OptionalTime(label: "Default time", none: "None — the timer counts up", seconds: $step.defaultSeconds)
                     HStack(alignment: .top, spacing: 10) {
                         OptionalTime(label: "Shortest", none: "No limit", seconds: $step.minSeconds, compact: true)
                         OptionalTime(label: "Longest", none: "No limit", seconds: $step.maxSeconds, compact: true)
                     }
+                }
+                if !step.isSelect {
                     HStack(spacing: 10) {
                         Field(label: "Tray") { NumberField(value: Binding(get: { step.tray.map(Double.init) }, set: { step.tray = $0.map { Int($0) } }), whole: true) }
                         Field(label: "Temp °C") { NumberField(value: $step.defaultTemp) }
@@ -337,6 +351,14 @@ struct StepForm: View {
         .background(Theme.bg)
         .navigationTitle(step.name)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var choice: Binding<String?> {
+        Binding(get: { step.materialKindId.map { "mk:\($0)" } ?? step.selectWhat },
+                set: { v in
+                    if let v, v.hasPrefix("mk:") { step.materialKindId = Int(v.dropFirst(3)); step.selectWhat = nil }
+                    else { step.materialKindId = nil; step.selectWhat = v }
+                })
     }
 
     private var kinds: [(code: String, name: String)] {

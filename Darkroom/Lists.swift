@@ -15,6 +15,13 @@ struct ListSpec: Identifiable, Hashable {
     let archives: Bool          // removing hides it (prints keep it); else no remove here
     let rowTitle: (JSON) -> String
     let rowSub: (JSON) -> String?
+    /// Sent with every new row (a material's kind).
+    var fixed: [String: JSON] = [:]
+    /// The list's own query, when it's part of a resource ("material&kind_id=3").
+    var listRes: String? = nil
+
+    /// The API resource: the id up to any ":" ("material:3" → material).
+    var resource: String { String(id.split(separator: ":").first ?? "") }
 
     static func == (a: ListSpec, b: ListSpec) -> Bool { a.id == b.id }
     func hash(into h: inout Hasher) { h.combine(id) }
@@ -72,13 +79,32 @@ struct ListSpec: Identifiable, Hashable {
                  required: ["name"], archives: false, rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil }),
         ListSpec(id: "negative_types", title: "Negative types", fields: [.init(key: "name", label: "Name", kind: .text)],
                  required: ["name"], archives: false, rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil }),
-        ListSpec(id: "photo_types", title: "Processes", fields: [
+        ListSpec(id: "photo_types", title: "Kinds of print", fields: [
             .init(key: "name", label: "Name", kind: .text),
             .init(key: "has_layers", label: "Prints can have layers", kind: .flag),
         ], required: ["name"], archives: false, rowTitle: { $0["name"].string ?? "" }, rowSub: { $0["has_layers"].flag ? "layers" : nil }),
         ListSpec(id: "step_kind", title: "Step kinds", fields: [.init(key: "name", label: "Name", kind: .text)],
                  required: ["name"], archives: true, rowTitle: { $0["name"].string ?? "" }, rowSub: { $0["built_in"].flag ? "built in" : nil }),
     ]
+
+    static func of(_ id: String) -> ListSpec { all.first { $0.id == id }! }
+
+    /// The owner's own kinds of material ("Photo Paper"): add one to get a new list.
+    static let materialKinds = ListSpec(id: "material_kind", title: "Kinds of material",
+        fields: [.init(key: "name", label: "Name", kind: .text)], required: ["name"], archives: true,
+        rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil })
+
+    /// One kind's materials, each named and edited to be whatever is in use.
+    static func materials(_ k: MaterialKind) -> ListSpec {
+        ListSpec(id: "material:\(k.id)", title: k.name, fields: [
+            .init(key: "label", label: "Name", kind: .text),
+            .init(key: "maker", label: "Maker", kind: .text),
+            .init(key: "notes", label: "Notes", kind: .notes),
+        ], required: ["label"], archives: true,
+           rowTitle: { $0["label"].string ?? "" },
+           rowSub: { j in [j["maker"].string, j["notes"].string].compactMap { $0 }.joined(separator: " · ") },
+           fixed: ["kind_id": .from(k.id)], listRes: "material&kind_id=\(k.id)")
+    }
 
     static func chemLabel(_ j: JSON) -> String {
         j["label"].string ?? [j["type_name"].string ?? "Batch", j["date_created"].string].compactMap { $0 }.joined(separator: " ")
@@ -107,8 +133,9 @@ extension AppStore {
 // MARK: Screens
 
 struct ListsView: View {
+    @Environment(AppStore.self) private var store
     var body: some View {
-        List(ListSpec.all) { spec in
+        List((store.snapshot?.materialKinds ?? []).map(ListSpec.materials) + ListSpec.all + [ListSpec.materialKinds]) { spec in
             NavigationLink(spec.title) { RowsView(spec: spec) }.font(Theme.body.weight(.bold))
                 .listRowBackground(Theme.box).foregroundStyle(.black)
         }
@@ -156,6 +183,7 @@ struct RowsView: View {
         .navigationTitle(spec.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("Add", systemImage: "plus") { adding = true } } }
+        .homeBulb()
         .refreshable { await load() }
         .task { await load() }
         .sheet(item: Binding(get: { editing.map(Wrapped.init) }, set: { editing = $0?.row })) { w in
@@ -165,7 +193,7 @@ struct RowsView: View {
     }
 
     private func load() async {
-        do { rows = try await store.list(spec.id); error = nil }
+        do { rows = try await store.list(spec.listRes ?? spec.resource); error = nil }
         catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — lists need a connection" : e.message }
         catch { self.error = error.localizedDescription }
     }
@@ -275,13 +303,13 @@ struct RowForm: View {
         if let miss = spec.required.first(where: { values[$0]?.string == nil }) {
             error = "\(spec.fields.first { $0.key == miss }?.label ?? miss) is needed"; return
         }
-        send(.object(values))
+        send(.object(values.merging(spec.fixed) { _, f in f }))
     }
 
     private func send(_ body: JSON) {
         busy = true; error = nil
         Task {
-            do { try await store.saveRow(spec.id, id: row?["id"].int, body); await saved(); dismiss() }
+            do { try await store.saveRow(spec.resource, id: row?["id"].int, body); await saved(); dismiss() }
             catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — try again with a connection" : e.message }
             catch { self.error = error.localizedDescription }
             busy = false

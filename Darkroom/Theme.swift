@@ -119,3 +119,41 @@ struct TimeWheels: View {
         .frame(maxWidth: .infinity).clipped()
     }
 }
+
+// MARK: Back to the start page
+
+private struct GoHomeKey: EnvironmentKey { static let defaultValue: (@MainActor () -> Void)? = nil }
+extension EnvironmentValues {
+    /// Set by the start page: goes back to it from a screen opened there.
+    var goHome: (@MainActor () -> Void)? {
+        get { self[GoHomeKey.self] }
+        set { self[GoHomeKey.self] = newValue }
+    }
+}
+
+/// The red bulb, top left: back to the start page.
+struct HomeBulb: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "lightbulb.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.red)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start page")
+    }
+}
+
+extension View {
+    /// The bulb in the navigation bar of a screen opened from the start page.
+    func homeBulb() -> some View { modifier(HomeBulbItem()) }
+}
+
+private struct HomeBulbItem: ViewModifier {
+    @Environment(\.goHome) private var goHome
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if let goHome { ToolbarItem(placement: .topBarLeading) { HomeBulb { goHome() } } }
+        }
+    }
+}

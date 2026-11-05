@@ -5,6 +5,7 @@ struct WalkView: View {
     @Bindable var model: WalkModel
     @Environment(AppStore.self) private var store
     @Environment(\.multiPrint) private var multi
+    @Environment(Walks.self) private var walks
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,9 +31,7 @@ struct WalkView: View {
                 guard abs(w) > 90, abs(v.translation.height) < abs(w) * 0.5 else { return }
                 if w > 0 { if model.draft.page > 0 { model.back() }; return }
                 guard model.page != .finish else { return }
-                if let s = model.page.step, s.isSelect, let what = s.selectWhat, model.chosen(what) == nil {
-                    model.status = "Choose one first"; return
-                }
+                if model.choiceMissing { model.status = "Choose one first"; return }
                 model.next()
             })
             Text(model.status ?? store.message ?? " ").font(Theme.small).foregroundStyle(Theme.dim)
@@ -46,6 +45,7 @@ struct WalkView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
+            HomeBulb { walks.home() }
             Text(model.header.uppercased()).font(Theme.display(26)).foregroundStyle(Theme.red)
                 .lineLimit(1).truncationMode(.tail)
             Spacer()
@@ -121,7 +121,23 @@ struct SelectPage: View {
         VStack(alignment: .leading, spacing: 12) {
             Title(text: step.name)
             Note(text: step.notes)
-            if let what = step.selectWhat {
+            if let kind = step.materialKindId {
+                let noun = (model.snap?.kindName(kind) ?? "material").lowercased()
+                Button(adding ? "Cancel" : "+ New \(noun)") { adding.toggle() }
+                    .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity, alignment: .leading)
+                if adding { NewKindMaterialForm(model: model, kind: kind) { adding = false } }
+                let cur = model.rec.materialId
+                ForEach(model.store.items(kind: kind)) { m in
+                    Button { model.pickMaterial(m.id) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(m.label).font(Theme.body.weight(.semibold))
+                            if let sub = m.sub { Text(sub).font(Theme.small).foregroundStyle(Theme.dim) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(WalkButtonStyle(on: m.id == cur))
+                }
+            } else if let what = step.selectWhat {
                 Button(adding ? "Cancel" : "+ New \(what.noun)") { adding.toggle() }
                     .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity, alignment: .leading)
                 if adding { NewMaterialForm(model: model, what: what) { adding = false } }
@@ -177,6 +193,30 @@ struct NewMaterialForm: View {
     }
 }
 
+/// A new one of the owner's own kinds ("Photo Paper"), chosen for this print at once.
+struct NewKindMaterialForm: View {
+    @Bindable var model: WalkModel
+    let kind: Int
+    let done: () -> Void
+    @State private var name = ""
+    @State private var maker = ""
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Field(label: "Name") { TextField("", text: $name) }
+            Field(label: "Maker") { TextField("optional", text: $maker) }
+            Button("Add & choose") {
+                let n = name.trimmingCharacters(in: .whitespaces)
+                guard !n.isEmpty else { model.status = "Type a name first"; return }
+                let mk = maker.trimmingCharacters(in: .whitespaces)
+                model.addMaterial(kind: kind, name: n, maker: mk.isEmpty ? nil : mk)
+                name = ""; maker = ""; done()
+            }
+            .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity)
+        }
+    }
+}
+
 /// A new chemistry batch, mixed now. Needs a connection: the batch is made
 /// on knotwork.ca and chosen for this step when it's there.
 struct NewBatchForm: View {
@@ -225,6 +265,7 @@ struct StepPage: View {
     @State private var adjustTime = false
     @State private var newBatch = false
     @State private var newMaterial = false
+    @State private var newKindMaterial = false
     @State private var ph = ""
 
     init(model: WalkModel, step: Step) {
@@ -257,55 +298,9 @@ struct StepPage: View {
                     .presentationDetents([.height(300)])
             }
 
-            // The time is the timer: tap it to start or pause.
-            TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
-                let r = model.rec.timer
-                let d = r.display(at: ctx.date)
-                Text(d.text)
-                    .font(.system(size: 220, weight: .heavy).width(.compressed)).monospacedDigit()
-                    .lineLimit(1).minimumScaleFactor(0.3)
-                    .opacity(d.over && Int(ctx.date.timeIntervalSince1970 * 2) % 2 == 0 ? 0.35 : 1)
-                    .frame(maxWidth: .infinity, minHeight: 170)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.startPause() }
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel(r.isRunning ? "Pause timer" : "Start timer")
-                    .overlay(alignment: .bottom) {
-                        // Over time: what will be saved is the whole time run.
-                        if d.over {
-                            Text("TOTAL \(Duration.format(Int(r.elapsed(at: ctx.date))))")
-                                .font(Theme.display(30)).foregroundStyle(Theme.red).offset(y: 18)
-                        }
-                    }
-            }
-            .padding(.bottom, 44)       // room for the clock and restart buttons under the time
-            .overlay(alignment: .bottomLeading) {
-                // The set time, on wheels, only when asked for.
-                Button { withAnimation { adjustTime.toggle() } } label: {
-                    Image(systemName: adjustTime ? "clock.fill" : "clock").font(.system(size: 34, weight: .semibold))
-                }
-                .buttonStyle(.plain).foregroundStyle(Theme.red)
-                .accessibilityLabel(adjustTime ? "Hide time setting" : "Set the time")
-            }
-            .overlay(alignment: .bottomTrailing) {
-                // Back to zero and counting again, as on the Watch.
-                Button { model.reset(); model.startPause() } label: {
-                    Image(systemName: "arrow.counterclockwise.circle").font(.system(size: 38, weight: .semibold))
-                }
-                .buttonStyle(.plain).foregroundStyle(Theme.red)
-                .accessibilityLabel("Restart timer")
-            }
-            if step.minSeconds != nil || step.maxSeconds != nil {
-                Text("range \(step.minSeconds.map(Duration.format) ?? "")–\(step.maxSeconds.map(Duration.format) ?? "")")
-                    .font(Theme.small).foregroundStyle(Theme.dim).frame(maxWidth: .infinity)
-            }
-
-            if adjustTime {
-                Field(label: "Time") {
-                    TimeWheels(seconds: model.target ?? 0) { model.setManual(seconds: $0) }
-                        .padding(.horizontal, -12).padding(.vertical, -10)
-                }
-            }
+            // The time is the timer: tap it to start or pause. A step with no
+            // timer is the instruction, then Next.
+            if step.timed { timer }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
                 if step.recordsPh {
                     Field(label: "pH") {
@@ -338,6 +333,19 @@ struct StepPage: View {
                 }
                 if newBatch { NewBatchForm(model: model, typeId: step.chemistryTypeId) { newBatch = false } }
             }
+            if let kind = step.materialKindId {
+                let name = model.snap?.kindName(kind) ?? "Material"
+                HStack(alignment: .bottom, spacing: 8) {
+                    Field(label: name) {
+                        Picker(name, selection: Binding(get: { model.rec.materialId }, set: { model.pickMaterial($0) })) {
+                            Text("—").tag(Int?.none)
+                            ForEach(model.store.items(kind: kind)) { Text($0.label).tag(Optional($0.id)) }
+                        }.pickerStyle(.menu).labelsHidden()
+                    }
+                    Button(newKindMaterial ? "Cancel" : "+ New") { newKindMaterial.toggle() }.buttonStyle(WalkButtonStyle())
+                }
+                if newKindMaterial { NewKindMaterialForm(model: model, kind: kind) { newKindMaterial = false } }
+            }
             if let what = step.selectWhat {
                 HStack(alignment: .bottom, spacing: 8) {
                     Field(label: what.noun.capitalized) {
@@ -357,6 +365,59 @@ struct StepPage: View {
             if step.lightsOkAfter { Text("Room lights can go on after this step").font(Theme.small) }
         }
     }
+
+    /// The countdown, its buttons and the time wheels.
+    @ViewBuilder private var timer: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
+            let r = model.rec.timer
+            let d = r.display(at: ctx.date)
+            Text(d.text)
+                .font(.system(size: 220, weight: .heavy).width(.compressed)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.3)
+                .opacity(d.over && Int(ctx.date.timeIntervalSince1970 * 2) % 2 == 0 ? 0.35 : 1)
+                .frame(maxWidth: .infinity, minHeight: 170)
+                .contentShape(Rectangle())
+                .onTapGesture { model.startPause() }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(r.isRunning ? "Pause timer" : "Start timer")
+                .overlay(alignment: .bottom) {
+                    // Over time: what will be saved is the whole time run.
+                    if d.over {
+                        Text("TOTAL \(Duration.format(Int(r.elapsed(at: ctx.date))))")
+                            .font(Theme.display(30)).foregroundStyle(Theme.red).offset(y: 18)
+                    }
+                }
+        }
+        .padding(.bottom, 44)       // room for the clock and restart buttons under the time
+        .overlay(alignment: .bottomLeading) {
+            // The set time, on wheels, only when asked for.
+            Button { withAnimation { adjustTime.toggle() } } label: {
+                Image(systemName: adjustTime ? "clock.fill" : "clock").font(.system(size: 34, weight: .semibold))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.red)
+            .accessibilityLabel(adjustTime ? "Hide time setting" : "Set the time")
+        }
+        .overlay(alignment: .bottomTrailing) {
+            // Back to zero and counting again, as on the Watch.
+            Button { model.reset(); model.startPause() } label: {
+                Image(systemName: "arrow.counterclockwise.circle").font(.system(size: 38, weight: .semibold))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.red)
+            .accessibilityLabel("Restart timer")
+        }
+        if step.minSeconds != nil || step.maxSeconds != nil {
+            Text("range \(step.minSeconds.map(Duration.format) ?? "")–\(step.maxSeconds.map(Duration.format) ?? "")")
+                .font(Theme.small).foregroundStyle(Theme.dim).frame(maxWidth: .infinity)
+        }
+
+        if adjustTime {
+            Field(label: "Time") {
+                TimeWheels(seconds: model.target ?? 0) { model.setManual(seconds: $0) }
+                    .padding(.horizontal, -12).padding(.vertical, -10)
+            }
+        }
+    }
+
 }
 
 struct FinishPage: View {
