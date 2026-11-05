@@ -4,6 +4,7 @@ import SwiftUI
 struct WalkView: View {
     @Bindable var model: WalkModel
     @Environment(AppStore.self) private var store
+    @Environment(\.multiPrint) private var multi
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,7 +60,7 @@ struct WalkView: View {
             if model.draft.page > 0 { Button("← Back") { model.back() }.buttonStyle(WalkButtonStyle()) }
             if model.page.step?.optional == true { Button("Skip") { model.skip() }.buttonStyle(WalkButtonStyle()) }
             Spacer(minLength: 24)
-            Button(model.page == .finish ? "FINISH ✓" : "NEXT →") { model.next() }.buttonStyle(NextButtonStyle(compact: true))
+            Button(model.page == .finish ? "FINISH ✓" : "NEXT →") { model.next() }.buttonStyle(NextButtonStyle(compact: true, long: multi))
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }

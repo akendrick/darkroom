@@ -57,14 +57,16 @@ struct WalkButtonStyle: ButtonStyle {
 /// size of a WalkButtonStyle button (the walk-through's Next beside Back).
 struct NextButtonStyle: ButtonStyle {
     var compact = false
+    /// Half as long again with bigger text, the same height (multi-print).
+    var long = false
     func makeBody(configuration: Configuration) -> some View {
         if compact {
             configuration.label
-                .font(Theme.body.weight(.heavy))
+                .font(long ? Theme.display(30) : Theme.body.weight(.heavy))
                 .lineLimit(1)
                 .foregroundStyle(Theme.onRed)
-                .padding(.horizontal, 22).padding(.vertical, 14)
-                .frame(minHeight: 54)
+                .padding(.horizontal, 22).padding(.vertical, long ? 10 : 14)
+                .frame(minWidth: long ? 165 : nil, minHeight: 54)
                 .background(Theme.red.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 10))
         } else {
             configuration.label

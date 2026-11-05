@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// The walk-throughs open on the phone: one, or two side by side in
-/// multi-print (the phone turns sideways). With one print it's on the right.
+/// The walk-throughs open on the phone: one, or two in multi-print — side
+/// by side with the phone sideways, one above the other with it upright.
+/// With one print it's on the right.
 @MainActor @Observable
 final class Walks {
     let store: AppStore
     var right: WalkModel?
     var left: WalkModel?
     var multi = false {
-        didSet { if multi != oldValue { Orientation.set(multi ? .landscape : .portrait) } }
+        didSet { if multi != oldValue { Orientation.set(multi ? .allButUpsideDown : .portrait) } }
     }
 
     var isOpen: Bool { multi || right != nil || left != nil }
@@ -55,7 +56,8 @@ final class Walks {
         else { open.first?.pushWatch() }      // the Watch follows the print still going
     }
 
-    /// Turns sideways: this print on the right, another can start on the left.
+    /// Two halves, following the phone: this print on the right (or below),
+    /// another can start on the left (or above).
     func split() {
         multi = true
         right?.side = .right
@@ -72,7 +74,7 @@ final class Walks {
     }
 }
 
-/// Which way the phone's screen may turn: upright, or sideways in multi-print.
+/// Which way the phone's screen may turn: upright, or either way in multi-print.
 enum Orientation {
     static var mask: UIInterfaceOrientationMask = .portrait
 
@@ -94,18 +96,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
-/// The open walk-through, or the two halves of multi-print: the left one
-/// black on red, the right one as usual.
+/// The open walk-through, or the two halves of multi-print: the left (or
+/// top) one black on red, the other as usual.
 struct WalkHost: View {
     @Environment(Walks.self) private var walks
 
     var body: some View {
         Group {
             if walks.multi {
-                HStack(spacing: 0) {
-                    half(walks.left, left: true).inverted()
-                    Rectangle().fill(Theme.red).frame(width: 2).ignoresSafeArea()
-                    half(walks.right, left: false)
+                GeometryReader { g in
+                    let wide = g.size.width > g.size.height
+                    let split = wide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+                    split {
+                        half(walks.left, left: true).inverted()
+                        Rectangle().fill(Theme.red).frame(width: wide ? 2 : nil, height: wide ? nil : 2).ignoresSafeArea()
+                        half(walks.right, left: false)
+                    }
                 }
             } else if let m = walks.right ?? walks.left {
                 WalkView(model: m).id(ObjectIdentifier(m))
@@ -122,6 +128,7 @@ struct WalkHost: View {
         Scaled(0.6) {
             if let m { WalkView(model: m).id(ObjectIdentifier(m)) } else { SecondStart(left: left) }
         }
+        .environment(\.multiPrint, true)
         .overlay { if let m { Overdue(model: m) } }
         .background(Theme.bg.ignoresSafeArea())
     }
@@ -219,6 +226,11 @@ extension AppStore {
         let send = d.unsent || d.pendingImage != nil ? " · not sent yet" : ""
         return "\(done) of \(steps.count) steps\(d.photoId.map { " · print #\($0)" } ?? "")\(send)"
     }
+}
+
+extension EnvironmentValues {
+    /// In a half of multi-print, drawn smaller: NEXT is made longer to hit.
+    @Entry var multiPrint = false
 }
 
 extension View {
