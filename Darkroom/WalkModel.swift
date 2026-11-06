@@ -23,6 +23,10 @@ final class WalkModel {
 
     var onClose: (() -> Void)?
 
+    /// The print as it was when opened, for Exit without saving; nil when it
+    /// started here, so there is nothing to go back to.
+    private var opened: PrintDraft?
+
     /// Which half of the screen in multi-print; nil with one print. The left
     /// one is shown, and alerts, black on red.
     enum Side { case left, right }
@@ -37,7 +41,10 @@ final class WalkModel {
         self.clientId = draft.clientId
         self.side = side
         self.last = draft
-        if store.drafts[clientId] == nil { store.update(draft) }
+        if store.drafts[clientId] == nil {
+            if draft.recordId != nil { opened = draft }   // carried on from knotwork.ca
+            store.update(draft)
+        } else { opened = store.drafts[clientId] }
         if self.draft.page >= pages.count { self.draft.page = pages.count - 1 }
         watchAlarm()
         pushWatch()
@@ -338,6 +345,19 @@ final class WalkModel {
         store.discard(clientId)
         close()
     }
+
+    /// Leaves without keeping this visit's changes: a print started here is
+    /// thrown away; one opened from earlier goes back to how it was (and is
+    /// sent like that, since each page was sent as it went).
+    func exitWithoutSaving() {
+        guard var d = opened else { return discard() }
+        d.photoId = d.photoId ?? draft.photoId
+        d.runId = d.runId ?? draft.runId
+        if d.recordId == nil { last = d; store.update(d) } else { send(d) }
+        close()
+    }
+
+    var startedHere: Bool { opened == nil }
 
     func finish() {
         var d = draft

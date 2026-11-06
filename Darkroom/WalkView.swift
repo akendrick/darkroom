@@ -641,10 +641,12 @@ struct WalkMenu: View {
     @State private var editing = false
     @State private var settings = false
     @State private var confirmDiscard = false
+    @State private var confirmExit = false
     var body: some View {
         Menu {
             Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
+            Button("Exit without saving", systemImage: "arrow.uturn.backward") { confirmExit = true }
             // A recipe changes under Chemistry / Materials, not on the day.
             if !model.draft.isMake { Button("Edit walk-through steps", systemImage: "list.number") { editing = true } }
             Button("Settings", systemImage: "gearshape") { settings = true }
@@ -663,6 +665,14 @@ struct WalkMenu: View {
                 .frame(width: 48, height: 48)
         }
         .accessibilityLabel("Menu")
+        .confirmationDialog("Exit without saving?", isPresented: $confirmExit, titleVisibility: .visible) {
+            Button("Exit without saving", role: .destructive) { model.exitWithoutSaving() }
+            Button("Keep going", role: .cancel) {}
+        } message: {
+            Text(model.startedHere
+                 ? "Nothing from this walk-through is kept."
+                 : "It goes back to how it was when you opened it.")
+        }
         .confirmationDialog(model.draft.isMake ? "Discard this walk-through?" : "Discard this print?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { model.discard() }
             Button("Keep it", role: .cancel) {}

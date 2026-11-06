@@ -46,8 +46,7 @@ final class Walks {
                 d.recs[PrintDraft.key(s, layer: 0)] = r
             }
         }
-        store.update(d)
-        show(d, left: left)
+        show(d, left: left)   // the walk adds it to the store, new
     }
 
     /// The walk-through that carries on from what was just made: a tissue from
