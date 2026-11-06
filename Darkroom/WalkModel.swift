@@ -51,7 +51,10 @@ final class WalkModel {
     var multiLayer: Bool { draft.layers.count > 1 }
 
     var header: String {
-        guard let n = stepPages.firstIndex(of: page) else { return draft.title.isEmpty ? "Walk-through" : draft.title }
+        guard let n = stepPages.firstIndex(of: page) else {
+            if draft.isMake { return preset?.name ?? "Walk-through" }
+            return draft.title.isEmpty ? "Walk-through" : draft.title
+        }
         return "Step \(n + 1)/\(stepPages.count)" + (page.layer > 0 && multiLayer ? " · L\(page.layer)" : "")
     }
 
@@ -67,25 +70,68 @@ final class WalkModel {
     /// A new record starts from the preset: its time, temperature and batch.
     private func fresh() -> StepRecord {
         var r = StepRecord()
-        if let s = page.step { r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s) }
+        if let s = page.step {
+            r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s)
+            // Add steps start from the recipe; changing them changes only today's.
+            if s.isPigment { r.pigments = [PigLine(pigmentId: s.pigmentId, grams: s.defaultAmount)] }
+            else if s.isAdd { r.amount = s.defaultAmount }
+        }
         return r
     }
 
     // MARK: Start page
 
-    var types: [PhotoType] {
-        let ps = snap?.presets ?? []
-        return (snap?.photoTypes ?? []).filter { t in ps.contains { $0.photoTypeId == t.id } }
-    }
-    var presetsForType: [Preset] { (snap?.presets ?? []).filter { $0.photoTypeId == draft.typeId } }
-    var locked: Bool { draft.photoId != nil }
+    /// Prints by kind, then the chemistry recipes, then tissue.
+    var groups: [WalkGroup] { WalkGroup.all(snap) }
+    var group: String? { preset?.group }
+    var presetsInGroup: [Preset] { (snap?.presets ?? []).filter { $0.group == group } }
+    var locked: Bool { draft.recordId != nil }
 
-    func pickType(_ id: Int) {
-        let ps = (snap?.presets ?? []).filter { $0.photoTypeId == id }
+    func pickGroup(_ g: String) {
+        let ps = (snap?.presets ?? []).filter { $0.group == g }
         guard let p = ps.first(where: \.isDefault) ?? ps.first else { return }
-        draft.typeId = id; draft.presetId = p.id
+        pickPreset(p.id)
     }
-    func pickPreset(_ id: Int) { draft.presetId = id }
+    func pickPreset(_ id: Int) {
+        guard let p = snap?.preset(id) else { return }
+        var d = draft
+        d.presetId = id; d.typeId = p.photoTypeId; d.makes = p.makesPrint ? nil : p.makes
+        draft = d
+    }
+
+    // MARK: Add / measure
+
+    var pigLines: [PigLine] {
+        get { rec.pigments ?? [PigLine(pigmentId: page.step?.pigmentId, grams: page.step?.defaultAmount)] }
+        set { rec.pigments = newValue }
+    }
+    /// Keeps the recipe's starting values on the page, so the rows hold still.
+    func keepDefaults() {
+        guard key != nil else { return }
+        var r = rec
+        if page.step?.isPigment == true, r.pigments == nil { r.pigments = pigLines }
+        rec = r
+    }
+
+    func addPigment(name: String) {
+        let p = store.addPigment(name: name)
+        var lines = pigLines
+        if let i = lines.firstIndex(where: { $0.pigmentId == nil }) { lines[i].pigmentId = p.id } else { lines.append(PigLine(pigmentId: p.id)) }
+        pigLines = lines
+        status = "Added \(name)"
+    }
+
+    // MARK: Choosing a batch
+
+    /// Batches of the step's type, newest first: the glop for a tissue.
+    func batchList(_ s: Step) -> [Batch] { batches(for: s).sorted { $0.id > $1.id } }
+
+    func pickBatch(_ id: Int) {
+        var r = rec
+        r.chemistryId = id; r.done = true
+        if r.startedAt == nil { r.startedAt = Clock.stamp() }
+        rec = r
+    }
 
     // MARK: Choosing a material
 
@@ -103,6 +149,7 @@ final class WalkModel {
     var choiceMissing: Bool {
         guard let s = page.step, s.isSelect else { return false }
         if s.materialKindId != nil { return rec.materialId == nil }
+        if s.choosesBatch { return rec.chemistryId == nil }
         return s.selectWhat.map { chosen($0) == nil } ?? false
     }
 
@@ -277,7 +324,7 @@ final class WalkModel {
 
     /// Saves and leaves; the print stays "in progress" to carry on later.
     func saveAndExit() {
-        if draft.photoId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
+        if draft.recordId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
             store.drafts[clientId] = nil; store.save()
         } else {
             send(draft)
@@ -294,6 +341,7 @@ final class WalkModel {
 
     func finish() {
         var d = draft
+        if d.isMake, (d.label ?? "").isEmpty { d.label = d.suggestedId(snap, pending: store.pendingPigmentCodes) }
         d.finished = true
         send(d)
         close()
@@ -323,7 +371,7 @@ final class WalkModel {
         // The Watch keeps to the essentials: no tray.
         let meta = (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" } ?? ""
         var title: String = switch page {
-        case .start: "New print"
+        case .start: draft.makes == "chemistry" ? "New batch" : draft.makes == "tissue" ? "New tissue" : "New print"
         case .finish: "Finish"
         case .step(let st, _): st.name
         }

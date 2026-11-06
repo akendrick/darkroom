@@ -1,5 +1,12 @@
 import Foundation
 
+/// One pigment and its grams on a pigment step.
+struct PigLine: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var pigmentId: Int?         // below 0 = added on the phone, not sent yet
+    var grams: Double?
+}
+
 /// What was recorded on one step page.
 struct StepRecord: Codable, Equatable {
     var timer = StepTimer()
@@ -14,6 +21,8 @@ struct StepRecord: Codable, Equatable {
     var skipped = false
     var done = false            // set by Next or Skip only
     var alarmed = false
+    var amount: Double?         // add steps: as measured today
+    var pigments: [PigLine]?    // pigment steps
 }
 
 /// One print being walked through. Kept on the phone and sent whole on every
@@ -41,9 +50,22 @@ struct PrintDraft: Codable, Identifiable, Equatable {
     var pendingImage: String?   // file name in the images folder, waiting for upload
     var updatedAt = Date()
 
+    // A walk that makes a chemistry batch or a tissue instead (a make_run).
+    var makes: String?          // nil or "print": a print
+    var runId: Int?
+    var label: String?          // the batch label or tissue ID, set on the last page
+    var volume: Double?
+    var size: String?
+    var amountPoured: String?
+    var madeId: Int?            // the batch or tissue it made, once sent
+
     var id: String { clientId }
 
     static func key(_ step: Step, layer: Int) -> String { "\(step.id):\(layer)" }
+
+    var isMake: Bool { (makes ?? "print") != "print" }
+    /// The print's or the run's id on the server.
+    var recordId: Int? { isMake ? runId : photoId }
 }
 
 /// A walk-through page.
@@ -71,6 +93,7 @@ extension PrintDraft {
     func isDone(_ page: WalkPage) -> Bool {
         guard case .step(let s, let layer) = page else { return page == .start }
         if s.isSelect, s.materialKindId != nil { return recs[Self.key(s, layer: layer)]?.materialId != nil }
+        if s.choosesBatch { return recs[Self.key(s, layer: layer)]?.chemistryId != nil }
         if s.isSelect {
             guard let f = s.selectWhat?.layerField else { return true }
             return layers[max(layer, 1) - 1][f] != nil
@@ -84,15 +107,85 @@ extension PrintDraft {
         return recs.first { $0.key.hasPrefix("\(other):") }?.value.chemistryId
     }
 
-    func defaultTitle(_ snap: Snapshot?) -> String { "\(snap?.typeName(typeId) ?? "Print") \(date)" }
+    func defaultTitle(_ snap: Snapshot?) -> String {
+        if isMake { return label ?? snap?.preset(presetId)?.name ?? "Walk-through" }
+        return "\(snap?.typeName(typeId) ?? "Print") \(date)"
+    }
+
+    /// Suggested ID MMDD-pigment ("1105-Ind.I"); a tissue takes its glop's
+    /// pigments. -2, -3 … when taken. Always changeable on the last page.
+    func suggestedId(_ snap: Snapshot?, pending: [Int: String] = [:]) -> String {
+        let md = date.dropFirst(5).replacingOccurrences(of: "-", with: "")
+        var pigs: [Int] = []
+        var glop: Batch?
+        let steps = snap?.preset(presetId)?.steps ?? []
+        if makes == "chemistry" {
+            for s in steps where s.isPigment { pigs += (recs[Self.key(s, layer: 0)]?.pigments ?? []).compactMap(\.pigmentId) }
+        } else if let s = steps.first(where: \.choosesBatch), let id = recs[Self.key(s, layer: 0)]?.chemistryId {
+            glop = snap?.batches.first { $0.id == id }; pigs = glop?.pigmentIds ?? []
+        }
+        var seen = Set<Int>()
+        let codes = pigs.filter { seen.insert($0).inserted }.compactMap { id in pending[id] ?? snap?.pigment(id)?.short }.filter { !$0.isEmpty }
+        let base = md + (codes.isEmpty ? (glop?.ownLabel.map { "-" + $0 } ?? "") : "-" + codes.joined(separator: "+"))
+        let taken: Set<String> = makes == "chemistry"
+            ? Set((snap?.batches ?? []).filter { $0.id != madeId }.compactMap(\.ownLabel))
+            : Set((snap?.raw["carbon_tissues"].array ?? []).filter { $0["id"].int != madeId }.compactMap { $0["title_id"].string })
+        var id = base, n = 2
+        while taken.contains(id) { id = "\(base)-\(n)"; n += 1 }
+        return id
+    }
+
+    /// The amount on a tissue's pour step: "45 mL".
+    func poured(_ snap: Snapshot?) -> String? {
+        for s in snap?.preset(presetId)?.steps ?? [] where s.isAdd && !s.isPigment {
+            if let r = recs[Self.key(s, layer: 0)], r.done, !r.skipped, let a = r.amount { return Amount.format(a) + (s.unit.map { " " + $0 } ?? "") }
+        }
+        return nil
+    }
+
+    /// A glop or tissue walk as darkroom-api.php's make_run takes it.
+    func runPayload(_ snap: Snapshot?, ids: [Int: Int]) -> JSON? {
+        var steps: [JSON] = [], pigments: [JSON] = []
+        for page in pages(snap?.preset(presetId)) {
+            guard case .step(let s, let layer) = page, let r = recs[Self.key(s, layer: layer)], r.done else { continue }
+            var amount = r.amount
+            if s.isPigment {
+                let lines = (r.pigments ?? []).filter { $0.pigmentId != nil }
+                for l in lines {
+                    var pid = l.pigmentId!
+                    if pid < 0 { guard let real = ids[pid] else { return nil }; pid = real }
+                    pigments.append(.object(["process_step_id": .from(s.id), "pigment_id": .from(pid), "grams": .from(l.grams)]))
+                }
+                amount = lines.contains { $0.grams != nil } ? lines.reduce(0) { $0 + ($1.grams ?? 0) } : nil
+            }
+            var material = r.materialId
+            if let m = material, m < 0 { guard let real = ids[m] else { return nil }; material = real }
+            steps.append(.object([
+                "process_step_id": .from(s.id), "name": .string(s.name), "kind": .string(s.kind),
+                "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
+                "amount": r.skipped ? .null : .from(amount), "unit": .from(s.isAdd ? s.unitShown : nil),
+                "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
+                "temp": .from(r.temp), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
+            ]))
+        }
+        let name = (label ?? "").isEmpty ? suggestedId(snap) : label!
+        return .object([
+            "preset_id": .from(presetId), "status": .string(finished ? "done" : "in_progress"),
+            "label": .string(name), "made_on": .string(date), "volume_ml": .from(volume),
+            "size": .from(size.flatMap { $0.isEmpty ? nil : $0 }),
+            "amount_poured": .from((amountPoured ?? "").isEmpty ? poured(snap) : amountPoured),
+            "notes": .from(notes.isEmpty ? nil : notes), "steps": .array(steps), "pigments": .array(pigments),
+        ])
+    }
 
     /// The print as darkroom-api.php takes it. `ids` turns phone-only material
     /// ids into server ones; nil while one is still unsent.
     func payload(_ snap: Snapshot?, ids: [Int: Int]) -> JSON? {
+        if isMake { return runPayload(snap, ids: ids) }
         var steps: [JSON] = []
         for page in pages(snap?.preset(presetId)) {
             // A choice of the owner's own kind of material is kept on its step.
-            guard case .step(let s, let layer) = page, !s.isSelect || s.materialKindId != nil,
+            guard case .step(let s, let layer) = page, !s.isSelect || s.materialKindId != nil || s.choosesBatch,
                   let r = recs[Self.key(s, layer: layer)], r.done else { continue }
             var material = r.materialId
             if let m = material, m < 0 { guard let real = ids[m] else { return nil }; material = real }
@@ -147,5 +240,34 @@ extension PrintDraft {
         }
     }
 
+    /// A glop or tissue walk started elsewhere, to carry on with here.
+    init?(run j: JSON) {
+        guard let id = j["id"].int, let preset = j["preset_id"].int else { return nil }
+        runId = id; presetId = preset; typeId = 0; makes = j["makes"].string ?? "chemistry"
+        clientId = j["client_id"].string ?? "run-\(id)"
+        label = j["label"].string; date = j["made_on"].string ?? Clock.today(); notes = j["notes"].string ?? ""
+        volume = j["volume_ml"].double; size = j["size"].string; amountPoured = j["amount_poured"].string
+        for s in j["steps"].array {
+            guard let sid = s["process_step_id"].int else { continue }
+            var r = StepRecord()
+            r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.amount = s["amount"].double
+            r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string
+            r.startedAt = s["started_at"].string; r.skipped = s["skipped"].flag; r.done = true
+            recs["\(sid):0"] = r
+        }
+        for p in j["pigments"].array {
+            guard let sid = p["process_step_id"].int else { continue }
+            var r = recs["\(sid):0"] ?? StepRecord(done: true)
+            r.pigments = (r.pigments ?? []) + [PigLine(pigmentId: p["pigment_id"].int, grams: p["grams"].double)]
+            recs["\(sid):0"] = r
+        }
+    }
+
     init(typeId: Int, presetId: Int) { self.typeId = typeId; self.presetId = presetId }
+
+    /// A new walk on this walk-through: a print, or a batch or tissue.
+    init(preset p: Preset) {
+        typeId = p.photoTypeId; presetId = p.id
+        if !p.makesPrint { makes = p.makes }
+    }
 }

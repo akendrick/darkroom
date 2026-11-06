@@ -24,6 +24,9 @@ struct StepEdit: Identifiable, Equatable {
     var notes = ""
     var sameAs: UUID?           // an earlier step in this list: "same batch as"
     var timesUsed = 0
+    var defaultAmount: Double?  // add steps: the recipe's amount
+    var unit: String?
+    var pigmentId: Int?         // pigment steps (selectWhat "pigment"): the usual pigment
 
     init() {}
 
@@ -36,9 +39,12 @@ struct StepEdit: Identifiable, Equatable {
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
         optional = j["optional"].flag; recordsPh = j["records_ph"].flag; lightsOkAfter = j["lights_ok_after"].flag
         notes = j["notes"].string ?? ""; timesUsed = j["times_used"].int ?? 0
+        defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
     }
 
     var isSelect: Bool { kind == "select" }
+    var isAdd: Bool { kind == "add" }
+    var isPigment: Bool { isAdd && selectWhat == "pigment" }
 
     func payload(sameAsIndex: Int?) -> JSON {
         .object([
@@ -46,7 +52,10 @@ struct StepEdit: Identifiable, Equatable {
             "select_what": .from(materialKindId == nil ? selectWhat : nil),     // any step can also choose a material
             "material_kind_id": .from(materialKindId), "timed": .from(timed ? 1 : 0),
             "per_layer": .from(perLayer ? 1 : 0), "asks_temp": .from(asksTemp ? 1 : 0), "tray": .from(tray),
-            "chemistry_type_id": .from(isSelect ? nil : chemistryTypeId),
+            // A choose step keeps a type only when it chooses a batch (the glop).
+            "chemistry_type_id": .from(isSelect && selectWhat != "chemistry" ? nil : chemistryTypeId),
+            "default_amount": .from(isAdd ? defaultAmount : nil), "unit": .from(isAdd ? unit.flatMap { $0.isEmpty ? nil : $0 } : nil),
+            "pigment_id": .from(isPigment ? pigmentId : nil),
             "default_seconds": .from(defaultSeconds), "min_seconds": .from(minSeconds), "max_seconds": .from(maxSeconds),
             "default_temp": .from(defaultTemp), "optional": .from(optional ? 1 : 0), "records_ph": .from(recordsPh ? 1 : 0),
             "lights_ok_after": .from(lightsOkAfter ? 1 : 0), "notes": .from(notes.isEmpty ? nil : notes),
@@ -132,8 +141,8 @@ struct EditWalksView: View {
 
     private var list: some View {
             List {
-                ForEach(store.snapshot?.photoTypes ?? []) { t in
-                    let ps = (store.snapshot?.presets ?? []).filter { $0.photoTypeId == t.id }
+                ForEach(WalkGroup.all(store.snapshot)) { t in
+                    let ps = (store.snapshot?.presets ?? []).filter { $0.group == t.id }
                     if !ps.isEmpty {
                         Section {
                             ForEach(ps) { p in
@@ -238,7 +247,13 @@ struct PresetStepsView: View {
     private func summary(_ s: StepEdit) -> String {
         if s.isSelect {
             if let k = s.materialKindId { return "Choose " + (store.snapshot?.kindName(k)?.lowercased() ?? "material") }
+            if s.selectWhat == "chemistry" { return "Choose " + (store.snapshot?.chemistryTypeName(s.chemistryTypeId)?.lowercased() ?? "a batch") }
             return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
+        }
+        if s.isAdd {
+            let amt = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? (s.isPigment ? "g" : ""))" }
+            let pig = s.isPigment ? (store.snapshot?.pigment(s.pigmentId)?.name ?? "pigment") : nil
+            return [[amt, pig].compactMap { $0 }.joined(separator: " "), s.optional ? "optional" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
         let kind = store.snapshot?.stepKinds.first { $0["code"].string == s.kind }?["name"].string ?? s.kind
         return [kind, s.defaultSeconds.map(Duration.format), s.tray.map { "tray \($0)" },
@@ -286,18 +301,42 @@ struct StepForm: View {
                         ForEach(kinds, id: \.code) { Text($0.name).tag($0.code) }
                     }.pickerStyle(.menu).labelsHidden()
                 }
+                if step.isAdd {
+                    HStack(spacing: 10) {
+                        Field(label: "Amount") { NumberField(value: $step.defaultAmount) }
+                        Field(label: "Unit") { TextField("g, mL…", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
+                    }
+                    Field(label: "Pigment") {
+                        Picker("Pigment", selection: pigmentChoice) {
+                            Text("— not a pigment —").tag(String?.none)
+                            Text("Any pigment (choose on the day)").tag(Optional("any"))
+                            ForEach(store.snapshot?.pigments ?? []) { Text($0.name).tag(Optional(String($0.id))) }
+                        }.pickerStyle(.menu).labelsHidden()
+                    }
+                }
                 // A choose step is only the list; any other step can also choose
                 // one (the support paper on "Soak final support", say).
+                if !step.isAdd {
                 Field(label: step.isSelect ? "Choose" : "Also choose") {
                     // The built-in lists, then the owner's own kinds ("mk:3").
                     Picker("Choose", selection: choice) {
                         Text("—").tag(String?.none)
                         ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
-                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil, step.materialKindId == nil {
+                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil, w != "chemistry", step.materialKindId == nil {
                             Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
                         }
+                        if step.isSelect { Text("Chemistry batch").tag(Optional("chemistry")) }
                         ForEach(store.snapshot?.materialKinds ?? []) { Text($0.name).tag(Optional("mk:\($0.id)")) }
                     }.pickerStyle(.menu).labelsHidden()
+                }
+                }
+                if step.isSelect && step.selectWhat == "chemistry" {
+                    Field(label: "Batch type") {
+                        Picker("Batch type", selection: $step.chemistryTypeId) {
+                            Text("Any").tag(Int?.none)
+                            ForEach(chemTypes, id: \.id) { Text($0.name).tag(Optional($0.id)) }
+                        }.pickerStyle(.menu).labelsHidden()
+                    }
                 }
                 if !step.isSelect {
                     Toggle("Timer (off: do it, then Next)", isOn: $step.timed).font(Theme.body.weight(.semibold)).tint(Theme.red)
@@ -351,6 +390,12 @@ struct StepForm: View {
         .background(Theme.bg)
         .navigationTitle(step.name)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// "any" or a pigment id: the step lists pigments; nil: a plain amount.
+    private var pigmentChoice: Binding<String?> {
+        Binding(get: { step.isPigment ? (step.pigmentId.map(String.init) ?? "any") : nil },
+                set: { v in step.selectWhat = v == nil ? nil : "pigment"; step.pigmentId = v.flatMap { Int($0) } })
     }
 
     private var choice: Binding<String?> {

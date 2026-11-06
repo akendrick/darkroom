@@ -65,7 +65,8 @@ struct HomeView: View {
     @State private var settings = false
     /// Which of the two start buttons is open; kept between launches.
     @AppStorage("homeOpen") private var openPart = "walk"
-    @State private var openType: Int?
+    @State private var openType: String?
+    @State private var editOn: RecipeId?
     @State private var path = NavigationPath()
 
     private var open: [PrintDraft] {
@@ -102,6 +103,16 @@ struct HomeView: View {
         #endif
         .fullScreenCover(isPresented: Binding(get: { walks.isOpen }, set: { _ in })) { WalkHost() }
         .sheet(isPresented: $editing) { EditWalksView() }
+        .sheet(item: $editOn) { EditWalksView(startOn: $0.id) }
+        // A batch or tissue just made: carry straight on with it.
+        .alert(madeTitle, isPresented: Binding(get: { store.made != nil && !walks.isOpen }, set: { if !$0 { store.made = nil } })) {
+            if let m = store.made, let p = walks.next(after: m) {
+                Button(m.makes == "tissue" ? "Make a print" : "Pour a tissue") { store.made = nil; walks.start(preset: p, made: m) }
+            }
+            Button("Not now", role: .cancel) { store.made = nil }
+        } message: {
+            Text(store.made.map { $0.makes == "tissue" ? "Make a print with \($0.label) now?" : "Pour a tissue from \($0.label) now?" } ?? "")
+        }
         .sheet(isPresented: $settings) { SettingsView() }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { Task { await store.signOut() } }
@@ -134,9 +145,10 @@ struct HomeView: View {
             part("proc", "PROCESSES")
             if openPart == "proc" { ProcessesList().padding(.leading, 8) }
             part("chem", "CHEMISTRY")
-            if openPart == "chem" { lists([.of("chemistry"), .of("chemistry_types")]) }
+            if openPart == "chem" { makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types")]) }
             part("mat", "MATERIALS")
             if openPart == "mat" {
+                makeButtons("tissue")
                 lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
                       + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
                       + [.materialKinds])
@@ -174,6 +186,27 @@ struct HomeView: View {
         .buttonStyle(NextButtonStyle())
     }
 
+    private var madeTitle: String {
+        store.made.map { $0.makes == "tissue" ? "Tissue \($0.label) saved" : "Batch \($0.label) saved" } ?? ""
+    }
+
+    /// ▶ each glop or tissue walk-through, and Edit recipe: the recipe is
+    /// changed here; a walk only records what was done that day.
+    private func makeButtons(_ makes: String) -> some View {
+        VStack(spacing: 8) {
+            ForEach((store.snapshot?.presets ?? []).filter { $0.makes == makes }) { p in
+                HStack(spacing: 8) {
+                    Button { walks.start(preset: p) } label: {
+                        Text("▶ " + (makes == "chemistry" ? "Make \(p.name)" : p.name)).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(NextButtonStyle(compact: true))
+                    Button("Edit recipe") { editOn = RecipeId(id: p.id) }.buttonStyle(WalkButtonStyle())
+                }
+            }
+        }
+        .padding(.leading, 8)
+    }
+
     /// Lists to open and edit; each one is also chosen from in the walk-throughs.
     private func lists(_ specs: [ListSpec]) -> some View {
         VStack(spacing: 10) {
@@ -195,8 +228,8 @@ struct HomeView: View {
     /// Each kind of print with its walk-throughs: tap one, then Begin.
     private var walkthroughs: some View {
         VStack(spacing: 10) {
-            ForEach(store.snapshot?.photoTypes ?? []) { t in
-                let ps = (store.snapshot?.presets ?? []).filter { $0.photoTypeId == t.id }
+            ForEach(WalkGroup.all(store.snapshot)) { t in
+                let ps = (store.snapshot?.presets ?? []).filter { $0.group == t.id }
                     .sorted { $0.isDefault && !$1.isDefault }
                 if !ps.isEmpty {
                     Button { withAnimation(.snappy) { openType = openType == t.id ? nil : t.id } } label: {
@@ -230,7 +263,7 @@ struct HomeView: View {
             // Open on the kind the last print was.
             if openType == nil, let snap = store.snapshot {
                 let last = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
-                openType = snap.preset(last)?.photoTypeId ?? snap.presets.first(where: \.isDefault)?.photoTypeId
+                openType = snap.preset(last)?.group ?? snap.presets.first(where: \.isDefault)?.group
             }
         }
     }
@@ -245,3 +278,6 @@ struct HomeView: View {
             .font(Theme.small).foregroundStyle(Theme.dim)
     }
 }
+
+/// A walk-through to open in the editor.
+private struct RecipeId: Identifiable { let id: Int }

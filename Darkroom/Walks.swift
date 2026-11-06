@@ -29,15 +29,36 @@ final class Walks {
     func start(left: Bool = false) {
         guard let snap = store.snapshot else { return }
         let lastPreset = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
-        guard let p = snap.preset(lastPreset) ?? snap.presets.first(where: \.isDefault) ?? snap.presets.first else { return }
+        let prints = snap.presets.filter(\.makesPrint)
+        guard let p = prints.first(where: { $0.id == lastPreset }) ?? prints.first(where: \.isDefault) ?? prints.first ?? snap.presets.first else { return }
         start(preset: p, left: left)
     }
 
-    /// A new print on this walk-through.
-    func start(preset p: Preset, left: Bool = false) {
-        let d = PrintDraft(typeId: p.photoTypeId, presetId: p.id)
+    /// A new print, batch or tissue on this walk-through. `made` is what the
+    /// walk before made, already chosen: the glop for a tissue, the tissue for a print.
+    func start(preset p: Preset, made: Made? = nil, left: Bool = false) {
+        var d = PrintDraft(preset: p)
+        if !p.makesPrint || made != nil { d.page = 1 }   // chosen already: open at its first step
+        if let made {
+            if made.makes == "tissue" { d.layers[0][SelectWhat.carbon_tissue.layerField] = made.id }
+            else if let s = p.steps.first(where: \.choosesBatch) {
+                var r = StepRecord(); r.chemistryId = made.id; r.startedAt = Clock.stamp(); r.done = true
+                d.recs[PrintDraft.key(s, layer: 0)] = r
+            }
+        }
         store.update(d)
         show(d, left: left)
+    }
+
+    /// The walk-through that carries on from what was just made: a tissue from
+    /// a glop batch, a print from a tissue.
+    func next(after m: Made) -> Preset? {
+        let ps = store.snapshot?.presets ?? []
+        if m.makes == "tissue" {
+            let prints = ps.filter { $0.makesPrint && $0.steps.contains { $0.selectWhat == .carbon_tissue } }
+            return prints.first(where: \.isDefault) ?? prints.first
+        }
+        return ps.first { p in p.steps.contains { $0.choosesBatch && ($0.chemistryTypeId == nil || $0.chemistryTypeId == m.typeId) } }
     }
 
     /// Back to the start page: every print open is saved and stays in progress.
@@ -232,7 +253,8 @@ extension AppStore {
         let steps = pages.filter { $0.step != nil }
         let done = steps.filter { d.isDone($0) }.count
         let send = d.unsent || d.pendingImage != nil ? " · not sent yet" : ""
-        return "\(done) of \(steps.count) steps\(d.photoId.map { " · print #\($0)" } ?? "")\(send)"
+        let what = d.isMake ? (snapshot?.preset(d.presetId)?.name ?? "walk-through") : d.photoId.map { "print #\($0)" }
+        return "\(done) of \(steps.count) steps\(what.map { " · " + $0 } ?? "")\(send)"
     }
 }
 

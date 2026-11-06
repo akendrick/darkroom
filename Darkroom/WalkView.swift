@@ -49,7 +49,7 @@ struct WalkView: View {
             Text(model.header.uppercased()).font(Theme.display(26)).foregroundStyle(Theme.red)
                 .lineLimit(1).truncationMode(.tail)
             Spacer()
-            PhotoButton(model: model)
+            if !model.draft.isMake { PhotoButton(model: model) }   // a photo belongs to a print
             WalkMenu(model: model)
         }
         .padding(.horizontal, 16).padding(.top, 8)
@@ -80,16 +80,23 @@ private struct Note: View {
 
 struct StartPage: View {
     @Bindable var model: WalkModel
+    private var heading: String {
+        let d = model.draft
+        if d.isMake { return d.label ?? (d.makes == "tissue" ? "New tissue" : "New batch") }
+        return d.photoId.map { "Print #\($0)" } ?? "New print"
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Title(text: model.draft.photoId.map { "Print #\($0)" } ?? "New print")
-            Note(text: "Pick the process, then Next.")
-            FlowRow(model.types, selected: model.draft.typeId, label: \.name) { model.pickType($0.id) }
+            Title(text: heading)
+            Note(text: "Pick what you are making, then Next." + (model.draft.isMake ? " You name it on the last page." : ""))
+            FlowRow(model.groups, selected: model.group, label: \.name) { model.pickGroup($0.id) }
                 .disabled(model.locked)
-            FlowRow(model.presetsForType, selected: model.draft.presetId, label: { $0.name + ($0.isDefault ? " ★" : "") }) { model.pickPreset($0.id) }
+            FlowRow(model.presetsInGroup, selected: model.draft.presetId, label: { $0.name + ($0.isDefault ? " ★" : "") }) { model.pickPreset($0.id) }
                 .disabled(model.locked)
-            Field(label: "Title") {
-                TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title)
+            if !model.draft.isMake {
+                Field(label: "Title") {
+                    TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title)
+                }
             }
         }
     }
@@ -136,6 +143,21 @@ struct SelectPage: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(WalkButtonStyle(on: m.id == cur))
+                }
+            } else if step.choosesBatch {
+                // The glop for a tissue: newest first, with its pigments.
+                let cur = model.rec.chemistryId
+                let list = model.batchList(step)
+                if list.isEmpty { Note(text: "No batches yet. Save & exit, make one, then carry on here.") }
+                ForEach(list) { b in
+                    Button { model.pickBatch(b.id) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(b.label).font(Theme.body.weight(.semibold))
+                            if let sub = b.pigmentsText { Text(sub).font(Theme.small).foregroundStyle(Theme.dim) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(WalkButtonStyle(on: b.id == cur))
                 }
             } else if let what = step.selectWhat {
                 Button(adding ? "Cancel" : "+ New \(what.noun)") { adding.toggle() }
@@ -258,6 +280,76 @@ struct NewBatchForm: View {
     }
 }
 
+/// Add / measure: today's amount, big, from the recipe until changed.
+struct AmountBlock: View {
+    @Bindable var model: WalkModel
+    let step: Step
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                NumberField(value: Binding(get: { model.rec.amount }, set: { model.rec.amount = $0 }))
+                    .font(Theme.display(64)).multilineTextAlignment(.center)
+                    .padding(.horizontal, 12).padding(.vertical, 4)
+                    .background(Theme.box, in: .rect(cornerRadius: 12)).foregroundStyle(.black)
+                Text(step.unitShown).font(Theme.display(40))
+            }
+            if let a = step.defaultAmount {
+                Text("Recipe: \(Amount.format(a)) \(step.unitShown)").font(Theme.small).foregroundStyle(Theme.dim)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// A pigment step: pigments and grams for today. Add another, or a new
+/// pigment; the recipe stays as it is.
+struct PigmentBlock: View {
+    @Bindable var model: WalkModel
+    let step: Step
+    @State private var adding = false
+    @State private var name = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(model.pigLines.enumerated()), id: \.element.id) { i, line in
+                HStack(spacing: 8) {
+                    Picker("Pigment", selection: Binding(get: { line.pigmentId }, set: { v in var l = model.pigLines; l[i].pigmentId = v; model.pigLines = l })) {
+                        Text("Pigment…").tag(Int?.none)
+                        ForEach(model.store.pigments) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    .pickerStyle(.menu).labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6).padding(.horizontal, 6)
+                    .background(Theme.box, in: .rect(cornerRadius: 10)).tint(.black)
+                    NumberField(value: Binding(get: { line.grams }, set: { v in var l = model.pigLines; l[i].grams = v; model.pigLines = l }))
+                        .frame(width: 80).multilineTextAlignment(.center)
+                        .padding(10).background(Theme.box, in: .rect(cornerRadius: 10)).foregroundStyle(.black)
+                    Text(step.unitShown).font(Theme.body.weight(.bold))
+                    if model.pigLines.count > 1 {
+                        Button { var l = model.pigLines; l.remove(at: i); model.pigLines = l } label: { Image(systemName: "xmark") }
+                            .buttonStyle(WalkButtonStyle()).accessibilityLabel("Remove pigment")
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button("+ Another pigment") { model.pigLines += [PigLine()] }.buttonStyle(WalkButtonStyle())
+                Button(adding ? "Cancel" : "+ New pigment") { adding.toggle() }.buttonStyle(WalkButtonStyle())
+            }
+            if adding {
+                Field(label: "New pigment") { TextField("", text: $name) }
+                Button("Add & choose") {
+                    let n = name.trimmingCharacters(in: .whitespaces)
+                    guard !n.isEmpty else { model.status = "Type a name first"; return }
+                    model.addPigment(name: n); name = ""; adding = false
+                }
+                .buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity)
+            }
+            let usual = [step.defaultAmount.map { "\(Amount.format($0)) \(step.unitShown)" }, model.snap?.pigment(step.pigmentId)?.name].compactMap { $0 }
+            if !usual.isEmpty { Text("Recipe: " + usual.joined(separator: " ")).font(Theme.small).foregroundStyle(Theme.dim) }
+        }
+    }
+}
+
 struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
@@ -278,6 +370,8 @@ struct StepPage: View {
         VStack(alignment: .leading, spacing: 14) {
             Title(text: step.name)
             Note(text: step.notes)
+            if step.isPigment { PigmentBlock(model: model, step: step).onAppear { model.keepDefaults() } }
+            else if step.isAdd { AmountBlock(model: model, step: step).onAppear { model.keepDefaults() } }
             HStack(alignment: .firstTextBaseline) {
                 if let t = step.tray { Text("TRAY \(t)").font(Theme.display(30)) }
                 Spacer()
@@ -420,9 +514,67 @@ struct StepPage: View {
 
 }
 
+/// The last page of a glop or tissue walk: name it, and it is made.
+struct RunFinishPage: View {
+    @Bindable var model: WalkModel
+    var body: some View {
+        let chem = model.draft.makes == "chemistry"
+        VStack(alignment: .leading, spacing: 14) {
+            Title(text: chem ? "Name the batch" : "Name the tissue")
+            VStack(spacing: 8) {
+                ForEach(model.stepPages, id: \.self) { pg in
+                    HStack(alignment: .top) {
+                        Text(pg.step!.name)
+                        Spacer()
+                        Text(summary(pg.step!)).foregroundStyle(Theme.dim).multilineTextAlignment(.trailing)
+                    }
+                    .font(Theme.small)
+                }
+            }
+            Field(label: chem ? "Batch label" : "Tissue ID") {
+                TextField("", text: Binding(get: { model.draft.label ?? model.draft.suggestedId(model.snap, pending: model.store.pendingPigmentCodes) },
+                                            set: { model.draft.label = $0 }))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            HStack(spacing: 10) {
+                Field(label: chem ? "Made" : "Poured") { TextField("YYYY-MM-DD", text: $model.draft.date).keyboardType(.numbersAndPunctuation) }
+                if chem { Field(label: "Volume mL") { NumberField(value: $model.draft.volume) } }
+                else { Field(label: "Size") { TextField("16x26", text: Binding(get: { model.draft.size ?? "" }, set: { model.draft.size = $0 })) } }
+            }
+            if !chem {
+                Field(label: "Amount poured") {
+                    TextField("", text: Binding(get: { model.draft.amountPoured ?? model.draft.poured(model.snap) ?? "" }, set: { model.draft.amountPoured = $0 }))
+                }
+            }
+            Field(label: "Notes") { TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6) }
+            Text("Finish saves it to \(chem ? "Chemistry" : "Materials → Carbon tissue"), ready to choose in the next walk-through. The recipe stays as it is.")
+                .font(Theme.small).foregroundStyle(Theme.dim)
+        }
+    }
+
+    private func summary(_ s: Step) -> String {
+        guard let r = model.draft.recs[PrintDraft.key(s, layer: 0)], r.done else { return "—" }
+        if r.skipped { return "skipped" }
+        if s.choosesBatch { return model.snap?.batches.first { $0.id == r.chemistryId }?.label ?? "—" }
+        if s.isPigment {
+            let t = (r.pigments ?? []).filter { $0.pigmentId != nil }.map { l in
+                (l.grams.map { "\(Amount.format($0)) g " } ?? "") + (model.store.pigments.first { $0.id == l.pigmentId }?.name ?? "")
+            }
+            return t.isEmpty ? "—" : t.joined(separator: " + ")
+        }
+        var bits = [r.amount.map { "\(Amount.format($0)) \(s.unitShown)" }, r.seconds.map(Duration.format), r.temp.map { "\($0.formatted()) °C" }].compactMap { $0 }
+        if s.isAdd, let a = r.amount, let d = s.defaultAmount, a != d { bits[0] += " (recipe \(Amount.format(d)))" }
+        return bits.isEmpty ? "✓" : bits.joined(separator: " · ")
+    }
+}
+
 struct FinishPage: View {
     @Bindable var model: WalkModel
     var body: some View {
+        if model.draft.isMake { RunFinishPage(model: model) } else { printFinish }
+    }
+
+    private var printFinish: some View {
         VStack(alignment: .leading, spacing: 14) {
             Title(text: "Done")
             VStack(spacing: 8) {
@@ -493,7 +645,8 @@ struct WalkMenu: View {
         Menu {
             Button("Save", systemImage: "square.and.arrow.down") { model.saveNow() }
             Button("Save & exit", systemImage: "xmark") { model.saveAndExit() }
-            Button("Edit walk-through steps", systemImage: "list.number") { editing = true }
+            // A recipe changes under Chemistry / Materials, not on the day.
+            if !model.draft.isMake { Button("Edit walk-through steps", systemImage: "list.number") { editing = true } }
             Button("Settings", systemImage: "gearshape") { settings = true }
             Divider()
             // Another print alongside this one, the phone turned sideways.
@@ -503,18 +656,18 @@ struct WalkMenu: View {
                 Button("One print", systemImage: "rectangle") { walks.single() }
             }
             Divider()
-            Button("Discard print", systemImage: "trash", role: .destructive) { confirmDiscard = true }
+            Button(model.draft.isMake ? "Discard" : "Discard print", systemImage: "trash", role: .destructive) { confirmDiscard = true }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
                 .frame(width: 48, height: 48)
         }
         .accessibilityLabel("Menu")
-        .confirmationDialog("Discard this print?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+        .confirmationDialog(model.draft.isMake ? "Discard this walk-through?" : "Discard this print?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { model.discard() }
             Button("Keep it", role: .cancel) {}
         } message: {
-            Text(model.draft.photoId == nil
+            Text(model.draft.recordId == nil
                  ? "Its steps, times and photo are deleted from this phone. This can't be undone."
                  : "Its steps, times and photo are deleted from this phone and from knotwork.ca. This can't be undone.")
         }

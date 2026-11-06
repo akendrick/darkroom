@@ -8,8 +8,15 @@ struct PendingMaterial: Codable, Equatable {
     var tempId: Int             // below 0, used in drafts until the server gives a real id
     var what: SelectWhat?       // nil: one of the owner's own kinds (kindId)
     var kindId: Int?
+    var resource: String?       // else from what / kindId: "pigment" for a new pigment
     var body: JSON
     var label: String
+}
+
+/// A batch or tissue a finished walk made, once the server has it: home offers
+/// the next walk-through with it already chosen.
+struct Made: Equatable, Identifiable {
+    let makes: String, id: Int, label: String, typeId: Int?
 }
 
 /// Everything the app keeps on the phone, and the queue of things to send.
@@ -22,6 +29,8 @@ final class AppStore {
     var drafts: [String: PrintDraft] = [:]
     var pendingMaterials: [PendingMaterial] = []
     var pendingDeletes: [Int] = []      // discarded prints still on the server
+    var pendingRunDeletes: [Int] = []   // discarded glop / tissue walks still on the server
+    var made: Made?
     /// Phone-only material id → server id, once sent.
     var idMap: [Int: Int] = [:]
     var online = true
@@ -30,7 +39,7 @@ final class AppStore {
 
     var signedIn: Bool { server.key != nil }
     var pendingCount: Int {
-        pendingMaterials.count + pendingDeletes.count + drafts.values.filter { $0.unsent || $0.pendingImage != nil }.count
+        pendingMaterials.count + pendingDeletes.count + pendingRunDeletes.count + drafts.values.filter { $0.unsent || $0.pendingImage != nil }.count
     }
 
     private let monitor = NWPathMonitor()
@@ -87,11 +96,18 @@ final class AppStore {
                 if drafts.values.contains(where: { $0.photoId == d.photoId || $0.clientId == d.clientId }) { continue }
                 drafts[d.clientId] = d
             }
+            for r in snapshot!.making {
+                guard let d = PrintDraft(run: r), !pendingRunDeletes.contains(d.runId ?? 0) else { continue }
+                if drafts.values.contains(where: { $0.runId == d.runId || $0.clientId == d.clientId }) { continue }
+                drafts[d.clientId] = d
+            }
             // Forget finished prints the server has, and in-progress ones finished elsewhere.
             let serverOpen = Set(snapshot!.inProgress.compactMap { $0["id"].int })
+            let runsOpen = Set(snapshot!.making.compactMap { $0["id"].int })
             drafts = drafts.filter { _, d in
                 if d.unsent || d.pendingImage != nil { return true }
                 if d.finished { return false }
+                if d.isMake { return d.runId == nil || runsOpen.contains(d.runId!) }
                 return d.photoId == nil || serverOpen.contains(d.photoId!)
             }
             message = nil
@@ -109,6 +125,7 @@ final class AppStore {
         guard let d = drafts.removeValue(forKey: clientId) else { return }
         if let name = d.pendingImage { try? FileManager.default.removeItem(at: imagesDir.appendingPathComponent(name)) }
         if let id = d.photoId { pendingDeletes.append(id) }
+        if let id = d.runId { pendingRunDeletes.append(id) }
         save()
         flush()
     }
@@ -143,9 +160,26 @@ final class AppStore {
         return Material(id: temp, label: name, sub: "added on this phone")
     }
 
+    /// A pigment added during a glop walk, queued like a material.
+    func addPigment(name: String) -> Pigment {
+        let temp = -Int(Date().timeIntervalSince1970 * 1000) % 1_000_000_000 - 1
+        pendingMaterials.append(PendingMaterial(tempId: temp, what: nil, resource: "pigment", body: .object(["name": .string(name)]), label: name))
+        save(); flush()
+        return Pigment(id: temp, name: name)
+    }
+
+    /// Server pigments plus any added here and not yet sent.
+    var pigments: [Pigment] {
+        pendingMaterials.filter { $0.resource == "pigment" }.map { Pigment(id: $0.tempId, name: $0.label) } + (snapshot?.pigments ?? [])
+    }
+    /// Short codes of pigments not sent yet, for suggested IDs.
+    var pendingPigmentCodes: [Int: String] {
+        Dictionary(uniqueKeysWithValues: pendingMaterials.filter { $0.resource == "pigment" }.map { ($0.tempId, Pigment(id: $0.tempId, name: $0.label).short) })
+    }
+
     /// Server materials of one of the owner's kinds, plus any added here and not yet sent.
     func items(kind: Int) -> [Material] {
-        let local = pendingMaterials.filter { $0.kindId == kind }
+        let local = pendingMaterials.filter { $0.kindId == kind && $0.resource == nil }
             .map { Material(id: $0.tempId, label: $0.label, sub: "added on this phone — sends when online") }
         return local.reversed() + (snapshot?.materials(kind) ?? [])
     }
@@ -164,7 +198,7 @@ final class AppStore {
 
     /// Server materials plus any added on this phone and not yet sent.
     func items(_ what: SelectWhat) -> [Material] {
-        let local = pendingMaterials.filter { $0.what == what && $0.kindId == nil }
+        let local = pendingMaterials.filter { $0.what == what && $0.kindId == nil && $0.resource == nil }
             .map { Material(id: $0.tempId, label: $0.label, sub: "added on this phone — sends when online") }
         let server = (snapshot?.items(what) ?? []).sorted { $0.id > $1.id }
         return local.reversed() + server
@@ -213,7 +247,7 @@ final class AppStore {
         // 1. Materials added on the phone, so prints can point at them.
         while let m = pendingMaterials.first {
             let r: JSON
-            do { r = try await server.request("darkroom-api.php?res=\(m.what?.resource ?? "material")", method: "POST", body: m.body) }
+            do { r = try await server.request("darkroom-api.php?res=\(m.resource ?? m.what?.resource ?? "material")", method: "POST", body: m.body) }
             catch let e as ServerError where !e.retry && !e.signedOut {
                 // Refused for good (a support paper with no base paper, say): let it
                 // go so it doesn't hold up everything behind it, and unchoose it.
@@ -221,6 +255,9 @@ final class AppStore {
                 for (k, var d) in drafts {
                     d.layers = d.layers.map { $0.filter { $0.value != m.tempId } }
                     for (rk, r) in d.recs where r.materialId == m.tempId { d.recs[rk]?.materialId = nil }
+                    for (rk, r) in d.recs where r.pigments?.contains(where: { $0.pigmentId == m.tempId }) == true {
+                        d.recs[rk]?.pigments = r.pigments?.map { var l = $0; if l.pigmentId == m.tempId { l.pigmentId = nil }; return l }
+                    }
                     drafts[k] = d
                 }
                 refused = "\(m.label) not added: \(e.message)"
@@ -234,14 +271,18 @@ final class AppStore {
             for (k, var d) in drafts {
                 d.layers = d.layers.map { $0.mapValues { $0 == m.tempId ? id : $0 } }
                 for (rk, r) in d.recs where r.materialId == m.tempId { d.recs[rk]?.materialId = id }
+                for (rk, r) in d.recs where r.pigments?.contains(where: { $0.pigmentId == m.tempId }) == true {
+                    d.recs[rk]?.pigments = r.pigments?.map { var l = $0; if l.pigmentId == m.tempId { l.pigmentId = id }; return l }
+                }
                 drafts[k] = d
             }
             listsChanged = true
             save()
         }
-        // 2. Prints, oldest change first.
+        // 2. Prints, and glop and tissue walks, oldest change first.
         for key in drafts.values.filter(\.unsent).sorted(by: { $0.updatedAt < $1.updatedAt }).map(\.clientId) {
             guard let d = drafts[key], let body = d.payload(snapshot, ids: idMap) else { continue }
+            if d.isMake { try await sendRun(key, d, body); continue }
             let stamp = d.updatedAt
             var photoId = d.photoId
             if photoId == nil {
@@ -282,7 +323,46 @@ final class AppStore {
         save()
     }
 
+    /// A glop or tissue walk. Finished, the server makes the batch or tissue
+    /// and says which; home then offers the next walk-through with it.
+    private func sendRun(_ key: String, _ d: PrintDraft, _ body: JSON) async throws {
+        let stamp = d.updatedAt
+        var r: JSON
+        if let id = d.runId {
+            r = try await server.request("darkroom-api.php?res=make_run&id=\(id)", method: "PATCH", body: body)
+        } else {
+            var create = body.object; create["client_id"] = .string(d.clientId)
+            r = try await server.request("darkroom-api.php?res=make_run", method: "POST", body: .object(create))
+            if r["duplicate"].flag, let id = r["id"].int {
+                r = try await server.request("darkroom-api.php?res=make_run&id=\(id)", method: "PATCH", body: body)
+                r = .object(r.object.merging(["id": .from(id)]) { a, _ in a })
+            }
+        }
+        let runId = d.runId ?? r["id"].int
+        let madeId = r["chemistry_id"].int ?? r["carbon_tissue_id"].int
+        guard var now = drafts[key] else {
+            if let runId { pendingRunDeletes.append(runId); save(); try await sendDeletes() }
+            return
+        }
+        now.runId = runId
+        if let madeId { now.madeId = madeId }
+        if now.updatedAt == stamp { now.unsent = false }
+        drafts[key] = now
+        if now.finished, !now.unsent, let madeId {
+            listsChanged = true
+            let label = body["label"].string ?? ""
+            made = Made(makes: now.makes ?? "chemistry", id: madeId, label: label, typeId: snapshot?.preset(now.presetId)?.chemistryTypeId)
+        }
+        save()
+    }
+
     private func sendDeletes() async throws {
+        while let id = pendingRunDeletes.first {
+            do { _ = try await server.request("darkroom-api.php?res=make_run&id=\(id)", method: "DELETE") }
+            catch let e as ServerError where !e.retry && !e.signedOut { }   // already gone
+            pendingRunDeletes.removeFirst()
+            save()
+        }
         while let id = pendingDeletes.first {
             do { _ = try await server.request("darkroom-api.php?res=photo&id=\(id)", method: "DELETE") }
             catch let e as ServerError where !e.retry && !e.signedOut { }   // already gone
@@ -299,6 +379,7 @@ final class AppStore {
         var pendingMaterials: [PendingMaterial]
         var idMap: [Int: Int]
         var pendingDeletes: [Int]?
+        var pendingRunDeletes: [Int]?
     }
 
     private var folder: URL {
@@ -314,7 +395,8 @@ final class AppStore {
     }
 
     func save() {
-        let s = Saved(snapshot: snapshot, drafts: drafts, pendingMaterials: pendingMaterials, idMap: idMap, pendingDeletes: pendingDeletes)
+        let s = Saved(snapshot: snapshot, drafts: drafts, pendingMaterials: pendingMaterials, idMap: idMap, pendingDeletes: pendingDeletes,
+                      pendingRunDeletes: pendingRunDeletes)
         if let d = try? JSONEncoder().encode(s) {
             try? d.write(to: folder.appendingPathComponent("state.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
@@ -325,6 +407,6 @@ final class AppStore {
         guard let d = try? Data(contentsOf: folder.appendingPathComponent("state.json")),
               let s = try? JSONDecoder().decode(Saved.self, from: d) else { return }
         snapshot = s.snapshot; drafts = s.drafts; pendingMaterials = s.pendingMaterials; idMap = s.idMap
-        pendingDeletes = s.pendingDeletes ?? []
+        pendingDeletes = s.pendingDeletes ?? []; pendingRunDeletes = s.pendingRunDeletes ?? []
     }
 }
