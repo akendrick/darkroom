@@ -14,9 +14,8 @@ records what you actually did so a good print can be repeated.
   silent (AlarmKit), show on the Lock Screen as a Live Activity, and appear on
   the Watch so you never touch the phone with wet hands.
 - **Darkroom mode.** Red on black, for use under the safelight.
-- **Make walks.** Mix a batch of chemistry (e.g. carbon glop, with your own
-  pigment amounts), pour tissue from that batch, then print with that tissue.
-  Each gets its own ID, so a finished print traces back to the batch it came from.
+- **Processes.** Reference notes for each process, in sections, with a PDF to
+  print and pin on the darkroom wall.
 - **Multi-print.** Two prints side by side, the phone turned sideways.
 - **Works offline.** Everything is kept on the phone and sent when there is a
   connection.
@@ -25,7 +24,7 @@ records what you actually did so a good print can be repeated.
 ## The server
 
 The app is the client half. It talks to a small PHP/MySQL web app (the
-Darkroom server) that stores prints, materials, chemistry and walk-throughs and
+Darkroom server) that stores prints, materials, chemistry, processes and walk-throughs and
 offers the same walk-throughs in a browser. **The server is not part of this
 repository.**
 
