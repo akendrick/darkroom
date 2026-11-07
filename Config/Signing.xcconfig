@@ -12,3 +12,7 @@ APP_BUNDLE_ID = ca.knotwork.darkroom
 // Server the app talks to. Debug builds can switch to the local test server
 // from the sign-in screen.
 DARKROOM_SERVER = https:/$()/knotwork.ca
+
+// Your own team and server, kept out of git: copy these lines into
+// Config/Signing.local.xcconfig (ignored) and fill them in there.
+#include? "Signing.local.xcconfig"
