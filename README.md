@@ -14,6 +14,9 @@ records what you actually did so a good print can be repeated.
   silent (AlarmKit), show on the Lock Screen as a Live Activity, and appear on
   the Watch so you never touch the phone with wet hands.
 - **Darkroom mode.** Red on black, for use under the safelight.
+- **Layers.** Gum and carbon prints built up in several passes: walk a finished
+  print again to add a layer. Each layer has its own walk-through, day, notes
+  and materials.
 - **Make walks.** Mix a batch of chemistry (e.g. carbon glop, with your own
   pigment amounts), pour tissue from that batch, then print with that tissue.
   Each gets its own ID, so a finished print traces back to the batch it came from.

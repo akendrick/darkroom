@@ -37,9 +37,13 @@ struct PrintDraft: Codable, Identifiable, Equatable {
     var date = Clock.today()
     var method: ExposureMethod?
     var notes = ""
-    /// One entry per print layer: "negative_id" → id. Ids below 0 are materials
+    /// This walk's layer: "negative_id" → id. Ids below 0 are materials
     /// added on the phone that the server hasn't been told about yet.
     var layers: [[String: Int]] = [[:]]
+    /// A print walk is one layer of the print: 1, then 2, 3 … for each
+    /// walk-through added to it later (gum, carbon built up in layers).
+    var layerNo: Int?           // nil: layer 1 (and drafts kept before layers)
+    var newLayer: Bool?         // added to a finished print here and not sent yet
     var recs: [String: StepRecord] = [:]
     var page = 0
     var finished = false
@@ -60,6 +64,9 @@ struct PrintDraft: Codable, Identifiable, Equatable {
     var madeId: Int?            // the batch or tissue it made, once sent
 
     var id: String { clientId }
+    var layer: Int { layerNo ?? 1 }
+    /// Which entry of `layers` a page's choice goes in: a print walk has one.
+    func layerIndex(_ pageLayer: Int) -> Int { isMake ? max(pageLayer, 1) - 1 : 0 }
 
     static func key(_ step: Step, layer: Int) -> String { "\(step.id):\(layer)" }
 
@@ -79,15 +86,24 @@ enum WalkPage: Equatable, Hashable {
 }
 
 extension PrintDraft {
-    /// Start, each per-layer step for each layer, the remaining steps, finish.
-    /// One layer per walk-through: multi-colour layers are added at the press
-    /// stage. A print that already has more keeps them all.
+    /// Start, the steps, finish. Every step of a print walk belongs to its
+    /// layer; a batch or tissue walk keeps per-layer steps first.
     func pages(_ preset: Preset?) -> [WalkPage] {
         let steps = preset?.steps ?? []
+        guard isMake else { return [.start] + steps.map { .step($0, layer: layer) } + [.finish] }
         var p: [WalkPage] = [.start]
-        for n in 1...max(1, layers.count) { p += steps.filter(\.perLayer).map { .step($0, layer: n) } }
+        p += steps.filter(\.perLayer).map { .step($0, layer: 1) }
         p += steps.filter { !$0.perLayer }.map { .step($0, layer: 0) }
         return p + [.finish]
+    }
+
+    /// A print kept on the phone before layers: its whole-print steps were
+    /// layer 0, and they are layer 1 now.
+    mutating func upgradeToLayers() {
+        guard !isMake, layerNo == nil else { return }
+        layerNo = 1
+        layers = [layers.first ?? [:]]
+        recs = Dictionary(recs.map { k, v in (k.hasSuffix(":0") ? String(k.dropLast(2)) + ":1" : k, v) }) { a, _ in a }
     }
 
     func isDone(_ page: WalkPage) -> Bool {
@@ -96,7 +112,8 @@ extension PrintDraft {
         if s.choosesBatch { return recs[Self.key(s, layer: layer)]?.chemistryId != nil }
         if s.isSelect {
             guard let f = s.selectWhat?.layerField else { return true }
-            return layers[max(layer, 1) - 1][f] != nil
+            let i = layerIndex(layer)
+            return layers.indices.contains(i) && layers[i][f] != nil
         }
         return recs[Self.key(s, layer: layer)]?.done ?? false
     }
@@ -190,54 +207,80 @@ extension PrintDraft {
             var material = r.materialId
             if let m = material, m < 0 { guard let real = ids[m] else { return nil }; material = real }
             steps.append(.object([
-                "process_step_id": .from(s.id), "layer_no": .from(layer), "name": .string(s.name),
+                "process_step_id": .from(s.id), "layer_no": .from(self.layer), "name": .string(s.name),
                 "kind": .string(s.kind), "tray": .from(s.tray), "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
                 "temp": .from(r.temp), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
         }
-        var outLayers: [JSON] = []
-        for l in layers {
-            var o: [String: JSON] = [:]
-            for (f, v) in l {
-                if v < 0 { guard let real = ids[v] else { return nil }; o[f] = .from(real) } else { o[f] = .from(v) }
-            }
-            outLayers.append(.object(o))
+        // This layer: its materials and walk-through. The server changes only
+        // this layer and its steps.
+        let status = finished ? "done" : "in_progress"
+        var o: [String: JSON] = ["preset_id": .from(presetId), "status": .string(status), "date_done": .string(date),
+                                 "notes": layer > 1 ? .from(notes.isEmpty ? nil : notes) : .null]
+        for (f, v) in layers.first ?? [:] {
+            if v < 0 { guard let real = ids[v] else { return nil }; o[f] = .from(real) } else { o[f] = .from(v) }
         }
-        // The print's exposure is the first layer's; every layer's is in its steps.
+        // The print's exposure, day and notes are layer 1's; a later layer's
+        // notes are its own, and the server keeps the rest as layer 1 left them.
         let exposure = steps.first { $0["kind"].string == "exposure" && !$0["skipped"].flag && $0["seconds"].int != nil }
-        return .object([
+        var body: [String: JSON] = [
             "title": .string(title.isEmpty ? defaultTitle(snap) : title),
             "edition": .from(edition.flatMap { $0.isEmpty ? nil : $0 }),
             "photo_type_id": .from(typeId), "preset_id": .from(presetId),
-            "status": .string(finished ? "done" : "in_progress"), "date_exposed": .string(date),
+            "status": .string(status), "date_exposed": .string(date),
             "exposure_seconds": exposure?["seconds"] ?? .null, "exposure_method": .from(method?.rawValue),
-            "notes": .from(notes.isEmpty ? nil : notes), "layers": .array(outLayers), "steps": .array(steps),
-        ])
+            "layer_no": .from(layer), "layer": .object(o), "steps": .array(steps),
+        ]
+        if layer == 1 { body["notes"] = .from(notes.isEmpty ? nil : notes) }
+        return .object(body)
     }
 
-    /// A print started elsewhere (the web page), to carry on with here.
+    /// A print in progress elsewhere (the web page): its unfinished layer, to
+    /// carry on with here.
     init?(server p: JSON) {
         guard let id = p["id"].int, let type = p["photo_type_id"].int, let preset = p["preset_id"].int else { return nil }
-        photoId = id; typeId = type; presetId = preset
+        let ls = p["layers"].array
+        let l = ls.last { $0["status"].string == "in_progress" } ?? ls.last
+        let n = l?["layer_no"].int ?? 1
+        photoId = id; typeId = type; presetId = l?["preset_id"].int ?? preset; layerNo = n
         clientId = p["client_id"].string ?? "photo-\(id)"
-        title = p["title"].string ?? ""; edition = p["edition"].string; date = p["date_exposed"].string ?? Clock.today()
+        if n > 1 { clientId += "-L\(n)" }
+        title = p["title"].string ?? ""; edition = p["edition"].string
+        date = l?["date_done"].string ?? p["date_exposed"].string ?? Clock.today()
         method = p["exposure_method"].string.flatMap(ExposureMethod.init(rawValue:))
-        notes = p["notes"].string ?? ""; hasImage = p["image_path"].string != nil
-        let ls = p["layers"].array.map { l -> [String: Int] in
-            var o: [String: Int] = [:]
-            for f in SelectWhat.allCases.map(\.layerField) { if let v = l[f].int { o[f] = v } }
-            return o
-        }
-        layers = ls.isEmpty ? [[:]] : ls
-        for s in p["steps"].array {
+        notes = (n > 1 ? l?["notes"].string : p["notes"].string) ?? ""; hasImage = p["image_path"].string != nil
+        layers = [Self.materials(l)]
+        for s in p["steps"].array where (s["layer_no"].int ?? 1) == n {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.ph = s["ph"].double
             r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string; r.startedAt = s["started_at"].string
             r.skipped = s["skipped"].flag; r.done = true
-            recs["\(sid):\(s["layer_no"].int ?? 0)"] = r
+            recs["\(sid):\(n)"] = r
         }
+    }
+
+    /// A finished print walked again: one more layer, on the walk-through the
+    /// layer before used, with its support paper and negative to change if need be.
+    init?(addingLayerTo p: JSON) {
+        guard let id = p["id"].int, let type = p["photo_type_id"].int else { return nil }
+        let ls = p["layers"].array
+        guard let preset = ls.last?["preset_id"].int ?? p["preset_id"].int else { return nil }
+        photoId = id; typeId = type; presetId = preset
+        layerNo = (ls.compactMap { $0["layer_no"].int }.max() ?? 1) + 1
+        newLayer = true
+        title = p["title"].string ?? ""; edition = p["edition"].string
+        method = p["exposure_method"].string.flatMap(ExposureMethod.init(rawValue:))
+        hasImage = p["image_path"].string != nil
+        layers = [Self.materials(ls.last).filter { $0.key != SelectWhat.carbon_tissue.layerField }]
+    }
+
+    /// A layer's materials from the server: "negative_id" → id.
+    private static func materials(_ l: JSON?) -> [String: Int] {
+        var o: [String: Int] = [:]
+        for f in SelectWhat.allCases.map(\.layerField) { if let v = l?[f].int { o[f] = v } }
+        return o
     }
 
     /// A glop or tissue walk started elsewhere, to carry on with here.

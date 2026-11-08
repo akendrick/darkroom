@@ -2,11 +2,13 @@ import SwiftUI
 
 /// Every print on knotwork.ca with a photo, newest first, under Start on the
 /// home screen. Read straight from the server, so it needs a connection; the
-/// photos themselves are cached. Long press a print to edit, hide or delete it.
+/// photos themselves are cached. Long press a print to add a layer, edit,
+/// hide or delete it.
 struct PrintsGrid: View {
     /// Reloads when this changes (the home screen's lists refresh).
     var reload: Date?
     @Environment(AppStore.self) private var store
+    @Environment(Walks.self) private var walks
     @State private var prints: [JSON] = []
     @State private var loading = true
     @State private var error: String?
@@ -44,6 +46,7 @@ struct PrintsGrid: View {
                         .buttonStyle(.plain)
                         .opacity(hidden.contains(id) ? 0.4 : 1)
                         .contextMenu {
+                            if canAddLayer(p) { Button("Add a layer", systemImage: "square.3.layers.3d") { walks.addLayer(to: p) } }
                             Button("Edit", systemImage: "pencil") { editing = p }
                             if hidden.contains(id) {
                                 Button("Show", systemImage: "eye") { setHidden(id, false) }
@@ -103,6 +106,10 @@ struct PrintsGrid: View {
 }
 
 private func imageURL(_ path: String?, _ base: URL) -> URL? { path.flatMap { URL(string: $0, relativeTo: base) } }
+
+/// A finished print can be walked again for another layer; one still in
+/// progress carries on from the home screen instead.
+func canAddLayer(_ p: JSON) -> Bool { p["status"].string != "in_progress" }
 
 /// A print's name: its title and edition, "Print 2/10".
 func printName(_ p: JSON, none: String = "Print") -> String {
@@ -176,11 +183,25 @@ private struct PrintPager: View {
     }
 }
 
-/// One print: the photo, then what was recorded for it.
+/// One print: the photo, then what was recorded for it, layer by layer.
 struct PrintDetail: View {
     let print: JSON
     let base: URL
+    @Environment(Walks.self) private var walks
     @State private var zoom = false
+
+    /// The print's layers, each with its own steps; one heading per layer
+    /// once there is more than one.
+    private var layers: [(head: String?, notes: String?, steps: [JSON])] {
+        let ls = print["layers"].array, steps = print["steps"].array
+        guard ls.count > 1 else { return [(nil, nil, steps)] }
+        return ls.map { l in
+            let n = l["layer_no"].int ?? 1
+            let head = ["LAYER \(n)", l["preset_name"].string, l["date_done"].string, l["status"].string == "in_progress" ? "in progress" : nil]
+                .compactMap { $0 }.joined(separator: " · ")
+            return (head, l["notes"].string, steps.filter { ($0["layer_no"].int ?? 1) == n })
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -196,10 +217,15 @@ struct PrintDetail: View {
                 Text([print["type_name"].string, print["preset_name"].string, print["date_exposed"].string, "#\(print["id"].int ?? 0)"]
                     .compactMap { $0 }.joined(separator: " · ")).font(Theme.small).foregroundStyle(Theme.dim)
                 if let n = print["notes"].string { Text(n).font(Theme.body) }
-                let steps = print["steps"].array
-                if !steps.isEmpty {
+                if canAddLayer(print) {
+                    Button("Add a layer", systemImage: "square.3.layers.3d") { walks.addLayer(to: print) }
+                        .font(Theme.body.weight(.semibold)).foregroundStyle(Theme.red)
+                }
+                ForEach(Array(layers.enumerated()), id: \.offset) { _, l in
+                    if let h = l.head { Text(h).font(Theme.label).tracking(1.5).foregroundStyle(Theme.bright).padding(.top, 6) }
+                    if let n = l.notes { Text(n).font(Theme.body) }
                     VStack(spacing: 0) {
-                        ForEach(Array(steps.enumerated()), id: \.offset) { _, s in
+                        ForEach(Array(l.steps.enumerated()), id: \.offset) { _, s in
                             HStack(alignment: .firstTextBaseline) {
                                 Text(s["name"].string ?? "Step").font(Theme.body.weight(.semibold))
                                 Spacer()
@@ -224,7 +250,6 @@ struct PrintDetail: View {
 
     private func stepSummary(_ s: JSON) -> String {
         if s["skipped"].flag { return "skipped" }
-        return [s["seconds"].int.map(Duration.format), s["temp"].double.map { "\($0.formatted()) °C" },
-                s["layer_no"].int.flatMap { $0 > 1 ? "L\($0)" : nil }].compactMap { $0 }.joined(separator: " · ")
+        return [s["seconds"].int.map(Duration.format), s["temp"].double.map { "\($0.formatted()) °C" }].compactMap { $0 }.joined(separator: " · ")
     }
 }

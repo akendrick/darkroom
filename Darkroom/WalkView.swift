@@ -83,17 +83,23 @@ struct StartPage: View {
     private var heading: String {
         let d = model.draft
         if d.isMake { return d.label ?? (d.makes == "tissue" ? "New tissue" : "New batch") }
+        if d.layer > 1 { return (d.title.isEmpty ? "Print #\(d.photoId ?? 0)" : d.title) + " · layer \(d.layer)" }
         return d.photoId.map { "Print #\($0)" } ?? "New print"
+    }
+    private var note: String {
+        if model.draft.isMake { return "Pick what you are making, then Next. You name it on the last page." }
+        if model.draft.layer > 1 { return model.locked ? "Carry on with this layer." : "Pick the walk-through for this layer, then Next. It can be a different one from the layers before." }
+        return "Pick what you are making, then Next."
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Title(text: heading)
-            Note(text: "Pick what you are making, then Next." + (model.draft.isMake ? " You name it on the last page." : ""))
+            Note(text: note)
             FlowRow(model.groups, selected: model.group, label: \.name) { model.pickGroup($0.id) }
                 .disabled(model.locked)
             FlowRow(model.presetsInGroup, selected: model.draft.presetId, label: { $0.name + ($0.isDefault ? " ★" : "") }) { model.pickPreset($0.id) }
                 .disabled(model.locked)
-            if !model.draft.isMake {
+            if !model.draft.isMake && model.draft.layer == 1 {
                 Field(label: "Title") {
                     TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title)
                 }
@@ -576,12 +582,12 @@ struct FinishPage: View {
 
     private var printFinish: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Title(text: "Done")
+            Title(text: model.draft.layer > 1 ? "Layer \(model.draft.layer) done" : "Done")
             VStack(spacing: 8) {
                 ForEach(model.stepPages.filter { !($0.step?.isSelect ?? true) }, id: \.self) { pg in
                     let r = model.draft.recs[PrintDraft.key(pg.step!, layer: pg.layer)]
                     HStack {
-                        Text(pg.step!.name + (pg.layer > 0 && model.multiLayer ? " · L\(pg.layer)" : ""))
+                        Text(pg.step!.name)
                         Spacer()
                         Text(summary(r)).foregroundStyle(Theme.dim)
                     }
@@ -594,7 +600,10 @@ struct FinishPage: View {
                                                                            set: { model.draft.edition = String($0.prefix(20)) }))
                     .textInputAutocapitalization(.characters).autocorrectionDisabled()
             }
-            Field(label: "Notes") { TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6) }
+            Field(label: model.draft.layer > 1 ? "Notes on this layer" : "Notes") {
+                TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6)
+            }
+            Note(text: "Once it's finished, Add a layer on the print walks it again for layer \(model.draft.layer + 1).")
         }
     }
 
@@ -658,7 +667,8 @@ struct WalkMenu: View {
                 Button("One print", systemImage: "rectangle") { walks.single() }
             }
             Divider()
-            Button(model.draft.isMake ? "Discard" : "Discard print", systemImage: "trash", role: .destructive) { confirmDiscard = true }
+            Button(model.draft.isMake ? "Discard" : model.draft.layer > 1 ? "Discard layer \(model.draft.layer)" : "Discard print",
+                   systemImage: "trash", role: .destructive) { confirmDiscard = true }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.red)
@@ -673,11 +683,14 @@ struct WalkMenu: View {
                  ? "Nothing from this walk-through is kept."
                  : "It goes back to how it was when you opened it.")
         }
-        .confirmationDialog(model.draft.isMake ? "Discard this walk-through?" : "Discard this print?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+        .confirmationDialog(model.draft.isMake ? "Discard this walk-through?" : model.draft.layer > 1 ? "Discard this layer?" : "Discard this print?",
+                            isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { model.discard() }
             Button("Keep it", role: .cancel) {}
         } message: {
-            Text(model.draft.recordId == nil
+            Text(model.draft.layer > 1 && !model.draft.isMake
+                 ? "Layer \(model.draft.layer)'s steps and times are deleted. The print and its other layers stay."
+                 : model.draft.recordId == nil
                  ? "Its steps, times and photo are deleted from this phone. This can't be undone."
                  : "Its steps, times and photo are deleted from this phone and from knotwork.ca. This can't be undone.")
         }

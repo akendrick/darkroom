@@ -49,6 +49,17 @@ final class Walks {
         show(d, left: left)   // the walk adds it to the store, new
     }
 
+    /// A finished print walked again for one more layer.
+    func addLayer(to p: JSON, left: Bool = false) {
+        guard var d = PrintDraft(addingLayerTo: p) else { return }
+        if store.snapshot?.preset(d.presetId) == nil {
+            let prints = store.snapshot?.presets.filter(\.makesPrint) ?? []
+            guard let p = prints.first(where: \.isDefault) ?? prints.first else { return }
+            d.presetId = p.id
+        }
+        show(d, left: left)
+    }
+
     /// The walk-through that carries on from what was just made: a tissue from
     /// a glop batch, a print from a tissue.
     func next(after m: Made) -> Preset? {
@@ -246,13 +257,14 @@ extension AppStore {
         [d.title.isEmpty ? d.defaultTitle(snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// "3 of 7 steps · print #12 · not sent yet"
+    /// "3 of 7 steps · print #12 · layer 2 · not sent yet"
     func progress(_ d: PrintDraft) -> String {
         let pages = d.pages(snapshot?.preset(d.presetId))
         let steps = pages.filter { $0.step != nil }
         let done = steps.filter { d.isDone($0) }.count
         let send = d.unsent || d.pendingImage != nil ? " · not sent yet" : ""
-        let what = d.isMake ? (snapshot?.preset(d.presetId)?.name ?? "walk-through") : d.photoId.map { "print #\($0)" }
+        let what = d.isMake ? (snapshot?.preset(d.presetId)?.name ?? "walk-through")
+                            : d.photoId.map { "print #\($0)" + (d.layer > 1 ? " · layer \(d.layer)" : "") }
         return "\(done) of \(steps.count) steps\(what.map { " · " + $0 } ?? "")\(send)"
     }
 }

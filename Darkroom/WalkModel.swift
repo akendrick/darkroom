@@ -42,7 +42,7 @@ final class WalkModel {
         self.side = side
         self.last = draft
         if store.drafts[clientId] == nil {
-            if draft.recordId != nil { opened = draft }   // carried on from knotwork.ca
+            if draft.recordId != nil && draft.newLayer != true { opened = draft }   // carried on from knotwork.ca
             store.update(draft)
         } else { opened = store.drafts[clientId] }
         if self.draft.page >= pages.count { self.draft.page = pages.count - 1 }
@@ -55,14 +55,15 @@ final class WalkModel {
     var pages: [WalkPage] { draft.pages(preset) }
     var page: WalkPage { pages[min(draft.page, pages.count - 1)] }
     var stepPages: [WalkPage] { pages.filter { $0.step != nil } }
-    var multiLayer: Bool { draft.layers.count > 1 }
+    /// "L2" on a print's second layer and after.
+    var layerTag: String? { !draft.isMake && draft.layer > 1 ? "L\(draft.layer)" : nil }
 
     var header: String {
         guard let n = stepPages.firstIndex(of: page) else {
             if draft.isMake { return preset?.name ?? "Walk-through" }
             return draft.title.isEmpty ? "Walk-through" : draft.title
         }
-        return "Step \(n + 1)/\(stepPages.count)" + (page.layer > 0 && multiLayer ? " · L\(page.layer)" : "")
+        return "Step \(n + 1)/\(stepPages.count)" + (layerTag.map { " · " + $0 } ?? "")
     }
 
     // MARK: The current step's record
@@ -89,10 +90,12 @@ final class WalkModel {
     // MARK: Start page
 
     /// Prints by kind, then the chemistry recipes, then tissue.
-    var groups: [WalkGroup] { WalkGroup.all(snap) }
+    var groups: [WalkGroup] { WalkGroup.all(snap).filter { draft.layer == 1 || $0.id.hasPrefix("p:") } }
     var group: String? { preset?.group }
     var presetsInGroup: [Preset] { (snap?.presets ?? []).filter { $0.group == group } }
-    var locked: Bool { draft.recordId != nil }
+    /// The walk-through can't change once something is recorded; a new layer
+    /// picks its own until then.
+    var locked: Bool { draft.recordId != nil && !(draft.newLayer == true && draft.recs.isEmpty) }
 
     func pickGroup(_ g: String) {
         let ps = (snap?.presets ?? []).filter { $0.group == g }
@@ -102,7 +105,8 @@ final class WalkModel {
     func pickPreset(_ id: Int) {
         guard let p = snap?.preset(id) else { return }
         var d = draft
-        d.presetId = id; d.typeId = p.photoTypeId; d.makes = p.makesPrint ? nil : p.makes
+        d.presetId = id; d.makes = p.makesPrint ? nil : p.makes
+        if d.layer == 1 { d.typeId = p.photoTypeId }   // a later layer keeps the print's type
         draft = d
     }
 
@@ -142,11 +146,15 @@ final class WalkModel {
 
     // MARK: Choosing a material
 
-    func chosen(_ what: SelectWhat) -> Int? { draft.layers[max(page.layer, 1) - 1][what.layerField] }
+    func chosen(_ what: SelectWhat) -> Int? {
+        let i = draft.layerIndex(page.layer)
+        return draft.layers.indices.contains(i) ? draft.layers[i][what.layerField] : nil
+    }
 
-    /// A per-layer page sets that layer; a whole-print page sets every layer.
+    /// A print walk sets its one layer; in a batch or tissue walk a per-layer
+    /// page sets that layer and a whole-walk page every layer.
     func pick(_ what: SelectWhat, _ id: Int?) {
-        let targets = page.layer > 0 ? [page.layer - 1] : Array(draft.layers.indices)
+        let targets = !draft.isMake ? [0] : page.layer > 0 ? [page.layer - 1] : Array(draft.layers.indices)
         var d = draft
         for i in targets { d.layers[i][what.layerField] = id }
         draft = d
@@ -331,7 +339,7 @@ final class WalkModel {
 
     /// Saves and leaves; the print stays "in progress" to carry on later.
     func saveAndExit() {
-        if draft.recordId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
+        if (draft.recordId == nil || draft.newLayer == true) && draft.page == 0 && !draft.unsent && draft.recs.isEmpty {   // nothing started yet
             store.drafts[clientId] = nil; store.save()
         } else {
             send(draft)

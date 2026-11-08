@@ -30,6 +30,7 @@ final class AppStore {
     var pendingMaterials: [PendingMaterial] = []
     var pendingDeletes: [Int] = []      // discarded prints still on the server
     var pendingRunDeletes: [Int] = []   // discarded glop / tissue walks still on the server
+    var pendingLayerDeletes: [String] = []  // discarded later layers still on the server: "photoId:layer"
     var made: Made?
     /// Phone-only material id → server id, once sent.
     var idMap: [Int: Int] = [:]
@@ -39,7 +40,7 @@ final class AppStore {
 
     var signedIn: Bool { server.key != nil }
     var pendingCount: Int {
-        pendingMaterials.count + pendingDeletes.count + pendingRunDeletes.count + drafts.values.filter { $0.unsent || $0.pendingImage != nil }.count
+        pendingMaterials.count + pendingDeletes.count + pendingRunDeletes.count + pendingLayerDeletes.count + drafts.values.filter { $0.unsent || $0.pendingImage != nil }.count
     }
 
     private let monitor = NWPathMonitor()
@@ -107,6 +108,7 @@ final class AppStore {
             drafts = drafts.filter { _, d in
                 if d.unsent || d.pendingImage != nil { return true }
                 if d.finished { return false }
+                if d.newLayer == true { return true }   // its print is still finished until the layer is sent
                 if d.isMake { return d.runId == nil || runsOpen.contains(d.runId!) }
                 return d.photoId == nil || serverOpen.contains(d.photoId!)
             }
@@ -124,10 +126,15 @@ final class AppStore {
     func discard(_ clientId: String) {
         guard let d = drafts.removeValue(forKey: clientId) else { return }
         if let name = d.pendingImage { try? FileManager.default.removeItem(at: imagesDir.appendingPathComponent(name)) }
-        if let id = d.photoId { pendingDeletes.append(id) }
+        if let id = d.photoId { deletePrint(id, d) }
         if let id = d.runId { pendingRunDeletes.append(id) }
         save()
         flush()
+    }
+
+    /// A print's later layer goes on its own; layer 1 takes the whole print.
+    private func deletePrint(_ id: Int, _ d: PrintDraft) {
+        if d.layer > 1 { pendingLayerDeletes.append("\(id):\(d.layer)") } else { pendingDeletes.append(id) }
     }
 
     func update(_ d: PrintDraft, send: Bool = false) {
@@ -298,10 +305,11 @@ final class AppStore {
             }
             guard var now = drafts[key] else {
                 // Discarded while it was being sent: take it off the server too.
-                if let photoId { pendingDeletes.append(photoId); save(); try await sendDeletes() }
+                if let photoId { deletePrint(photoId, d); save(); try await sendDeletes() }
                 continue
             }
             now.photoId = photoId
+            now.newLayer = nil      // on the server now, in progress
             if now.updatedAt == stamp { now.unsent = false }   // not changed while sending
             drafts[key] = now
             save()
@@ -363,6 +371,13 @@ final class AppStore {
             pendingRunDeletes.removeFirst()
             save()
         }
+        while let pl = pendingLayerDeletes.first {
+            let p = pl.split(separator: ":")
+            do { _ = try await server.request("darkroom-api.php?res=photo&id=\(p[0])&layer=\(p.count > 1 ? p[1] : "0")", method: "DELETE") }
+            catch let e as ServerError where !e.retry && !e.signedOut { }   // already gone
+            pendingLayerDeletes.removeFirst()
+            save()
+        }
         while let id = pendingDeletes.first {
             do { _ = try await server.request("darkroom-api.php?res=photo&id=\(id)", method: "DELETE") }
             catch let e as ServerError where !e.retry && !e.signedOut { }   // already gone
@@ -380,6 +395,7 @@ final class AppStore {
         var idMap: [Int: Int]
         var pendingDeletes: [Int]?
         var pendingRunDeletes: [Int]?
+        var pendingLayerDeletes: [String]?
     }
 
     private var folder: URL {
@@ -396,7 +412,7 @@ final class AppStore {
 
     func save() {
         let s = Saved(snapshot: snapshot, drafts: drafts, pendingMaterials: pendingMaterials, idMap: idMap, pendingDeletes: pendingDeletes,
-                      pendingRunDeletes: pendingRunDeletes)
+                      pendingRunDeletes: pendingRunDeletes, pendingLayerDeletes: pendingLayerDeletes)
         if let d = try? JSONEncoder().encode(s) {
             try? d.write(to: folder.appendingPathComponent("state.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
@@ -408,5 +424,7 @@ final class AppStore {
               let s = try? JSONDecoder().decode(Saved.self, from: d) else { return }
         snapshot = s.snapshot; drafts = s.drafts; pendingMaterials = s.pendingMaterials; idMap = s.idMap
         pendingDeletes = s.pendingDeletes ?? []; pendingRunDeletes = s.pendingRunDeletes ?? []
+        pendingLayerDeletes = s.pendingLayerDeletes ?? []
+        for k in drafts.keys { drafts[k]?.upgradeToLayers() }
     }
 }
