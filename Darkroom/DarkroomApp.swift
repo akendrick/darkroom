@@ -26,6 +26,7 @@ struct DarkroomApp: App {
                     _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
                     await StepAlarm.shared.authorize()
                     await store.refresh()
+                    store.ready = true
                 }
         }
         .onChange(of: phase) { _, p in if p == .active { Task { await store.refresh() } } }
@@ -41,10 +42,63 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @State private var splash = true
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if store.signedIn { HomeView() } else { SignInView() }
+            if splash {
+                SplashView { withAnimation(.easeOut(duration: 0.5)) { splash = false } }
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
+        .statusBarHidden(splash)
+    }
+}
+
+/// On opening: the red bulb on black, its light spreading until everything is
+/// red, then the app, once the lists have loaded.
+private struct SplashView: View {
+    @Environment(AppStore.self) private var store
+    let finished: () -> Void
+    @State private var lit = false
+    @State private var spread = false
+    @State private var inked = false
+    private let red = Color(red: 1, green: 0.165, blue: 0.102)
+    /// Never held longer than this, so a slow or missing connection can't trap it.
+    private let longest: TimeInterval = 8
+
+    var body: some View {
+        GeometryReader { g in
+            let size = hypot(g.size.width, g.size.height) * 1.5
+            ZStack {
+                Color.black
+                Circle().fill(red).frame(width: size, height: size).blur(radius: 50)
+                    .scaleEffect(spread ? 1 : 0.02)
+                    .opacity(lit ? 1 : 0)
+                bulb(red).opacity(lit && !inked ? 1 : 0)
+                bulb(.black).opacity(inked ? 1 : 0)
+            }
+            .frame(width: g.size.width, height: g.size.height)
+        }
+        .ignoresSafeArea()
+        .accessibilityLabel("Darkroom is opening")
+        .task {
+            let start = Date()
+            withAnimation(.easeIn(duration: 0.5)) { lit = true }
+            try? await Task.sleep(for: .seconds(0.5))
+            withAnimation(.easeIn(duration: 2.4)) { spread = true }
+            withAnimation(.easeIn(duration: 0.8).delay(1.5)) { inked = true }
+            try? await Task.sleep(for: .seconds(2.6))
+            while !store.ready && Date().timeIntervalSince(start) < longest {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            finished()
+        }
+    }
+
+    private func bulb(_ colour: Color) -> some View {
+        Image(systemName: "lightbulb.fill").font(.system(size: 110, weight: .bold)).foregroundStyle(colour)
     }
 }

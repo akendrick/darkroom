@@ -63,8 +63,12 @@ struct HomeView: View {
     @State private var confirmSignOut = false
     @State private var editing = false
     @State private var settings = false
-    /// Which of the start buttons is open; kept between launches.
-    @AppStorage("homeOpenPart") private var openPart = "proc"
+    /// Which of the start buttons is open; none shows them as a 2x2 grid.
+    @State private var openPart = ""
+    @State private var scroll = ScrollPosition(edge: .top)
+    /// The title has gone up, so the bulb floats in its corner to bring it back.
+    @State private var scrolledPast = false
+    @Namespace private var partSpace
     @State private var editOn: RecipeId?
     @State private var path = NavigationPath()
 
@@ -75,6 +79,17 @@ struct HomeView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView { content.padding(20) }
+                .scrollPosition($scroll)
+                .overlay(alignment: .topLeading) {
+                    if scrolledPast {
+                        HomeBulb { withAnimation(.snappy) { scroll.scrollTo(edge: .top) } }
+                            .background(Theme.bg, in: .circle)
+                            .padding(.leading, 12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: scrolledPast)
+                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 96 } action: { _, v in scrolledPast = v }
                 .background(Theme.bg)
                 .refreshable { await store.refresh() }
                 .toolbar(.hidden, for: .navigationBar)
@@ -139,22 +154,66 @@ struct HomeView: View {
             }
             statusLine
 
-            if !favourites.isEmpty { favouriteRows }
-            if !open.isEmpty { inProgress }
-            part("proc", "PROCESSES")
-            if openPart == "proc" { ProcessesList().padding(.leading, 8) }
-            part("chem", "CHEMISTRY")
-            if openPart == "chem" { makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types"), .of("bath_type")]) }
-            part("mat", "MATERIALS")
-            if openPart == "mat" {
-                makeButtons("tissue")
-                lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
-                      + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
-                      + [.materialKinds])
+            if openPart.isEmpty {
+                VStack(spacing: 12) {
+                    ForEach([0, 2], id: \.self) { n in
+                        HStack(spacing: 12) {
+                            tile(Self.parts[n]); tile(Self.parts[n + 1])
+                        }
+                    }
+                }
+            } else if let p = Self.parts.first(where: { $0.key == openPart }) {
+                HStack(spacing: 8) {
+                    ForEach(Self.parts.filter { $0.key != openPart }, id: \.key) { tile($0, small: true) }
+                }
+                part(p.key, p.title)
+                partContent(p.key)
             }
 
             PrintsGrid(reload: store.snapshot?.fetchedAt).padding(.top, 8)
         }
+    }
+
+    private static let parts = [(key: "walk", title: "WALKS"), (key: "proc", title: "PROCESSES"), (key: "chem", title: "CHEMISTRY"), (key: "mat", title: "MATERIALS")]
+
+    @ViewBuilder private func partContent(_ key: String) -> some View {
+        switch key {
+        case "walk":
+            if !favourites.isEmpty { favouriteRows }
+            if !open.isEmpty { inProgress }
+            if favourites.isEmpty && open.isEmpty {
+                Text("No favourites or walks in progress.").font(Theme.small).foregroundStyle(Theme.dim).padding(.leading, 8)
+            }
+        case "proc":
+            ProcessesList().padding(.leading, 8)
+        case "chem":
+            makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types"), .of("bath_type")])
+        default:
+            makeButtons("tissue")
+            lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
+                  + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
+                  + [.materialKinds])
+        }
+    }
+
+    private func tile(_ p: (key: String, title: String), small: Bool = false) -> some View {
+        Button { withAnimation(.snappy) { openPart = p.key; if small { scroll.scrollTo(edge: .top) } } } label: {
+            Theme.red
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    VStack(spacing: small ? 3 : 10) {
+                        partIcon(p.key, size: small ? 62 : 96)
+                        Text(p.title).font(Theme.display(small ? 16 : 26)).tracking(small ? 1 : 2).lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .foregroundStyle(Theme.onRed)
+                    .padding(small ? 4 : 8)
+                }
+                .clipShape(.rect(cornerRadius: 14))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .matchedGeometryEffect(id: p.key, in: partSpace)
     }
 
     private var favourites: [Preset] { (store.snapshot?.presets ?? []).filter(\.favourite) }
@@ -193,14 +252,28 @@ struct HomeView: View {
 
     private func part(_ key: String, _ title: String) -> some View {
         Button { withAnimation(.snappy) { openPart = openPart == key ? "" : key } } label: {
-            HStack {
-                Text(title)
+            HStack(spacing: 12) {
+                partIcon(key, size: 28)
+                Text(title).font(Theme.display(26)).tracking(2)
                 Spacer()
-                Image(systemName: openPart == key ? "chevron.down" : "chevron.right").font(.system(size: 24, weight: .heavy))
+                Image(systemName: openPart == key ? "chevron.down" : "chevron.right").font(.system(size: 18, weight: .heavy))
             }
-            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(NextButtonStyle())
+        .buttonStyle(NextButtonStyle(compact: true))
+        .matchedGeometryEffect(id: key, in: partSpace)
+    }
+
+    @ViewBuilder private func partIcon(_ key: String, size: CGFloat) -> some View {
+        Group {
+            switch key {
+            case "walk": FilmIcon().fill(.foreground, style: FillStyle(eoFill: true))
+            case "proc": ProcessIcon().fill(.foreground)
+            case "chem": Image(systemName: "flask.fill").font(.system(size: size * 0.82, weight: .bold))
+            default: EnlargerIcon().fill(.foreground)
+            }
+        }
+        .frame(width: size, height: size)
     }
 
     private var madeTitle: String {
@@ -259,3 +332,65 @@ struct HomeView: View {
 
 /// A walk-through to open in the editor.
 private struct RecipeId: Identifiable { let id: Int }
+
+/// A photographic enlarger: column and base, carriage, lamp head, lens, easel.
+struct EnlargerIcon: Shape {
+    func path(in r: CGRect) -> Path {
+        let u = min(r.width, r.height) / 24
+        func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect { CGRect(x: r.minX + x * u, y: r.minY + y * u, width: w * u, height: h * u) }
+        var p = Path()
+        p.addRoundedRect(in: box(4, 1, 2, 20), cornerSize: CGSize(width: u, height: u))
+        p.addRoundedRect(in: box(1, 21, 21, 2.2), cornerSize: CGSize(width: u, height: u))
+        p.addRect(box(2.5, 6.5, 5, 7))
+        p.addLines([CGPoint(x: 9, y: 6), CGPoint(x: 18, y: 6), CGPoint(x: 22, y: 9), CGPoint(x: 22, y: 14), CGPoint(x: 9, y: 14)]
+            .map { CGPoint(x: r.minX + $0.x * u, y: r.minY + $0.y * u) })
+        p.closeSubpath()
+        p.addRect(box(13, 15, 5, 1.5))
+        p.addRect(box(14, 17.3, 3, 1.3))
+        p.addRect(box(10, 19.2, 12, 0.9))
+        return p
+    }
+}
+
+/// A printer bent over a tray, with prints drying on a line.
+struct ProcessIcon: Shape {
+    func path(in r: CGRect) -> Path {
+        let u = min(r.width, r.height) / 24
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * u, y: r.minY + y * u) }
+        func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect { CGRect(origin: pt(x, y), size: CGSize(width: w * u, height: h * u)) }
+        var p = Path()
+        p.addRect(box(0.5, 2, 23, 0.9))
+        for x in [1.5, 5.5, 9.5] as [CGFloat] { p.addRect(box(x, 2.9, 3.2, 3.8)) }
+        p.addEllipse(in: box(13.5, 5.5, 4, 4))
+        var figure = Path()
+        figure.addLines([pt(7.5, 22.8), pt(9.5, 14), pt(13.5, 11), pt(18, 14)])
+        p.addPath(figure.strokedPath(StrokeStyle(lineWidth: 2.4 * u, lineCap: .round, lineJoin: .round)))
+        p.addLines([pt(17.5, 9.5), pt(21, 9), pt(22, 13), pt(18.8, 13.6)])
+        p.closeSubpath()
+        p.addRect(box(16.5, 15.5, 7, 2.6))
+        p.addRect(box(15.5, 19, 8.5, 1.1))
+        return p
+    }
+}
+
+/// Two strips of film pegged on a line to dry.
+struct FilmIcon: Shape {
+    func path(in r: CGRect) -> Path {
+        let u = min(r.width, r.height) / 24
+        func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect { CGRect(x: r.minX + x * u, y: r.minY + y * u, width: w * u, height: h * u) }
+        var p = Path()
+        for s in [(x: 1, w: 3.9), (x: 8.1, w: 7.8), (x: 19.1, w: 3.9)] as [(x: CGFloat, w: CGFloat)] { p.addRect(box(s.x, 2.4, s.w, 0.9)) }
+        for (x, bottom) in [(1.5, 18.5), (12.5, 23)] as [(CGFloat, CGFloat)] {
+            p.addRect(box(x + 4, 0.8, 2, 4.6))
+            p.addRoundedRect(in: box(x + 3.4, 5.4, 3.2, 2.6), cornerSize: CGSize(width: 0.5 * u, height: 0.5 * u))
+            p.addRoundedRect(in: box(x, 8, 10, bottom - 8), cornerSize: CGSize(width: 0.5 * u, height: 0.5 * u))
+            var y: CGFloat = 8.8
+            while y + 1 < bottom - 0.5 {
+                p.addRect(box(x + 0.8, y, 1.2, 0.95))
+                p.addRect(box(x + 8, y, 1.2, 0.95))
+                y += 1.75
+            }
+        }
+        return p
+    }
+}

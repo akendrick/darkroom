@@ -400,6 +400,8 @@ private struct SectionPage: View {
     let editMode: Bool
     @State private var editing: WalkStepTarget?
     @State private var editingStep: ProcStep?
+    /// What a dragged walk step is hovering over.
+    @State private var dropOn: String?
     /// The step a new walk is being started from, while asking what it makes.
     @State private var startingOn: Int?
     /// The overview steps showing their walk steps as bars.
@@ -467,7 +469,37 @@ private struct SectionPage: View {
             .background(Theme.walkBar, in: .rect(cornerRadius: 6))
     }
 
-    private func bar(_ i: Int, _ n: Int, _ w: StepEdit) -> some View {
+    /// In Edit a bar can be dragged onto another bar, or onto a process step.
+    @ViewBuilder private func bar(_ i: Int, _ n: Int, _ w: StepEdit) -> some View {
+        if editMode, let sid = w.serverId {
+            barBody(i, n, w)
+                .draggable(String(sid)) { chip(Text(w.name)) }
+                .dropDestination(for: String.self) { items, _ in drop(items) { $0.walk?.serverId == sid } }
+                isTargeted: { dropOn = $0 ? "w\(sid)" : (dropOn == "w\(sid)" ? nil : dropOn) }
+                .overlay { if dropOn == "w\(sid)" { RoundedRectangle(cornerRadius: 8).stroke(Theme.red, lineWidth: 2) } }
+        } else {
+            barBody(i, n, w)
+        }
+    }
+
+    /// Moves a dropped walk step and saves it. On a bar it takes that bar's place;
+    /// on a process step it becomes the first walk step under it.
+    private func drop(_ items: [String], on target: (ProcessEdit.Row) -> Bool) -> Bool {
+        guard let sid = items.first.flatMap({ Int($0) }) else { return false }
+        let e = ProcessEdit(process)
+        e.load { store.rawPreset($0) }
+        let rows = e.rows(section.key)
+        guard let from = rows.firstIndex(where: { $0.walk?.serverId == sid }),
+              let to = rows.firstIndex(where: target), from != to else { return false }
+        e.moveRows(section.key, from: [from], to: rows[to].overview != nil || from < to ? to + 1 : to)
+        guard e.changed else { return false }
+        Task {
+            do { try await store.saveProcess(e) } catch { store.message = message(error) }
+        }
+        return true
+    }
+
+    private func barBody(_ i: Int, _ n: Int, _ w: StepEdit) -> some View {
         HStack(spacing: 4) {
             Button { if editMode { editing = WalkStepTarget(stepId: w.serverId, block: i) } else { toggle(i) } } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -535,6 +567,9 @@ private struct SectionPage: View {
                             } else if walk?[n - 1]?.isEmpty ?? true { pencil(n - 1, hasWalk: walk != nil) }
                         }
                         .foregroundStyle(Theme.red)
+                        .dropDestination(for: String.self) { items, _ in editMode && drop(items) { $0.overview?.id == s.id } }
+                        isTargeted: { dropOn = $0 ? "s\(n)" : (dropOn == "s\(n)" ? nil : dropOn) }
+                        .background { if dropOn == "s\(n)" { RoundedRectangle(cornerRadius: 8).stroke(Theme.red, lineWidth: 2).padding(-4) } }
                         if editMode || !(walk?[n - 1]?.isEmpty ?? true) { dropdown(n - 1, walk?[n - 1] ?? [], hasWalk: walk != nil) }
                     }
                 }

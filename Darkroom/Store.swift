@@ -26,6 +26,8 @@ struct Made: Equatable, Identifiable {
 final class AppStore {
     private(set) var server = Server(base: Server.defaultBase, key: Keychain.read())
     var snapshot: Snapshot?
+    /// The first load since opening has finished, whether or not it reached the server.
+    var ready = false
     var drafts: [String: PrintDraft] = [:]
     var pendingMaterials: [PendingMaterial] = []
     var pendingDeletes: [Int] = []      // discarded prints still on the server
