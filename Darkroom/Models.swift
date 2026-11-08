@@ -111,7 +111,7 @@ struct Step: Identifiable, Equatable, Hashable {
         id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
         selectWhat = j["select_what"].string.flatMap(SelectWhat.init(rawValue:))
         materialKindId = j["material_kind_id"].int
-        timed = j["timed"] == .null ? true : j["timed"].flag
+        timed = kind != "do" && (j["timed"] == .null ? true : j["timed"].flag)
         perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
         chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double

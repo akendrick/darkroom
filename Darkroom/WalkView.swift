@@ -399,8 +399,8 @@ struct StepPage: View {
             }
 
             // The time is the timer: tap it to start or pause. A step with no
-            // timer is the instruction, then Next.
-            if step.timed { timer }
+            // timer is the instruction, then a big Done that acts as Next.
+            if step.timed { timer } else if !step.isAdd { doneButton }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
                 if step.recordsPh {
                     Field(label: "pH") {
@@ -467,6 +467,17 @@ struct StepPage: View {
     }
 
     /// The countdown, its buttons and the time wheels.
+    private var doneButton: some View {
+        Button { model.next() } label: {
+            Text("DONE")
+                .font(.system(size: 220, weight: .heavy).width(.compressed))
+                .lineLimit(1).minimumScaleFactor(0.3)
+                .frame(maxWidth: .infinity, minHeight: 170)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder private var timer: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
             let r = model.rec.timer

@@ -297,7 +297,7 @@ struct StepForm: View {
             VStack(alignment: .leading, spacing: 14) {
                 Field(label: "Name") { TextField("", text: $step.name) }
                 Field(label: "Kind") {
-                    Picker("Kind", selection: $step.kind) {
+                    Picker("Kind", selection: Binding(get: { step.kind }, set: { step.kind = $0; if $0 == "do" { step.timed = false } })) {
                         ForEach(kinds, id: \.code) { Text($0.name).tag($0.code) }
                     }.pickerStyle(.menu).labelsHidden()
                 }
