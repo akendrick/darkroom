@@ -377,8 +377,8 @@ struct StepForm: View {
                     }
                     flag("Room lights can go on after", $step.lightsOkAfter)
                 }
-                Field(label: "Notes shown on the step") {
-                    TextField("", text: $step.notes, axis: .vertical).lineLimit(2...5)
+                Field(label: "Directions shown on the step") {
+                    TextField("", text: $step.notes, axis: .vertical).lineLimit(5...14)
                 }
                 if step.timesUsed > 0 {
                     Text("Used by \(step.timesUsed) print\(step.timesUsed == 1 ? "" : "s") so far. Changes apply from the next one.")
