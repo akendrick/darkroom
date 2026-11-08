@@ -27,6 +27,10 @@ struct StepEdit: Identifiable, Equatable {
     var defaultAmount: Double?  // add steps: the recipe's amount
     var unit: String?
     var pigmentId: Int?         // pigment steps (selectWhat "pigment"): the usual pigment
+    var bathTypeId: Int?        // bath steps: Fog, Develop…
+    var defaultHumidity: Double?
+    var instructionId: Int?     // the overview step it belongs to, as the server has it
+    var block: UUID?            // while editing a process: that overview step (nil: before the first)
 
     init() {}
 
@@ -40,7 +44,13 @@ struct StepEdit: Identifiable, Equatable {
         optional = j["optional"].flag; recordsPh = j["records_ph"].flag; lightsOkAfter = j["lights_ok_after"].flag
         notes = j["notes"].string ?? ""; timesUsed = j["times_used"].int ?? 0
         defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
+        bathTypeId = j["bath_type_id"].int; defaultHumidity = j["default_humidity"].double; instructionId = j["instruction_id"].int
+        if kind == "do", timed, materialKindId != nil || selectWhat != nil { kind = "select" }
     }
+
+    /// A list with a timer is kept as a To-do that also chooses: only
+    /// those pages can show both.
+    private var storedKind: String { isSelect && timed && selectWhat != "chemistry" ? "do" : kind }
 
     var isSelect: Bool { kind == "select" }
     var isAdd: Bool { kind == "add" }
@@ -48,9 +58,10 @@ struct StepEdit: Identifiable, Equatable {
 
     func payload(sameAsIndex: Int?) -> JSON {
         .object([
-            "id": .from(serverId), "name": .string(name), "kind": .string(kind),
+            "id": .from(serverId), "name": .string(name), "kind": .string(storedKind), "bath_type_id": .from(kind == "bath" ? bathTypeId : nil),
+            "default_humidity": .from(kind == "dry" ? defaultHumidity : nil), "timed": .from(timed ? 1 : 0),
             "select_what": .from(materialKindId == nil ? selectWhat : nil),     // any step can also choose a material
-            "material_kind_id": .from(materialKindId), "timed": .from(timed ? 1 : 0),
+            "material_kind_id": .from(materialKindId),
             "per_layer": .from(perLayer ? 1 : 0), "asks_temp": .from(asksTemp ? 1 : 0), "tray": .from(tray),
             // A choose step keeps a type only when it chooses a batch (the glop).
             "chemistry_type_id": .from(isSelect && selectWhat != "chemistry" ? nil : chemistryTypeId),
@@ -61,6 +72,40 @@ struct StepEdit: Identifiable, Equatable {
             "lights_ok_after": .from(lightsOkAfter ? 1 : 0), "notes": .from(notes.isEmpty ? nil : notes),
             "same_as_index": .from(sameAsIndex),
         ])
+    }
+}
+
+extension StepEdit {
+    /// A walk's live steps from the sync feed.
+    static func list(_ preset: JSON) -> [StepEdit] {
+        let raw = preset["steps"].array.filter { !$0["archived"].flag }
+        var s = raw.map(StepEdit.init)
+        // "Same batch as" points at a server id; here it points at the row.
+        for (i, r) in raw.enumerated() {
+            if let other = r["same_as_step_id"].int { s[i].sameAs = s.first { $0.serverId == other }?.id }
+        }
+        return s
+    }
+}
+
+extension Snapshot {
+    /// One line on a step, for lists of steps.
+    func summary(_ s: StepEdit) -> String {
+        if s.isSelect {
+            if let k = s.materialKindId { return "Choose " + (kindName(k)?.lowercased() ?? "material") }
+            if s.selectWhat == "chemistry" { return "Choose " + (chemistryTypeName(s.chemistryTypeId)?.lowercased() ?? "a batch") }
+            return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
+        }
+        if s.isAdd {
+            let amt = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? (s.isPigment ? "g" : ""))" }
+            let pig = s.isPigment ? (pigment(s.pigmentId)?.name ?? "pigment") : nil
+            return [[amt, pig].compactMap { $0 }.joined(separator: " "), s.optional ? "optional" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        let bath = s.kind == "bath" ? bathTypes.first { $0.id == s.bathTypeId }?.name : nil
+        let kind = bath ?? stepKinds.first { $0["code"].string == s.kind }?["name"].string ?? s.kind
+        return [kind, s.timed ? s.defaultSeconds.map(Duration.format) : nil, s.tray.map { "tray \($0)" },
+                s.defaultTemp.map { "\($0.formatted()) °C" }, s.timed ? nil : "no timer", s.optional ? "optional" : nil, s.perLayer ? "per layer" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -80,12 +125,7 @@ final class PresetEdit {
         let n = j["name"].string ?? "", d = j["is_default"].flag
         id = j["id"].int ?? 0
         name = n; isDefault = d; originalName = n; originalDefault = d
-        let raw = j["steps"].array.filter { !$0["archived"].flag }
-        var s = raw.map(StepEdit.init)
-        // "Same batch as" points at a server id; here it points at the row.
-        for (i, r) in raw.enumerated() {
-            if let other = r["same_as_step_id"].int { s[i].sameAs = s.first { $0.serverId == other }?.id }
-        }
+        let s = StepEdit.list(j)
         steps = s; original = s
     }
 
@@ -241,22 +281,7 @@ struct PresetStepsView: View {
         }
     }
 
-    private func summary(_ s: StepEdit) -> String {
-        if s.isSelect {
-            if let k = s.materialKindId { return "Choose " + (store.snapshot?.kindName(k)?.lowercased() ?? "material") }
-            if s.selectWhat == "chemistry" { return "Choose " + (store.snapshot?.chemistryTypeName(s.chemistryTypeId)?.lowercased() ?? "a batch") }
-            return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
-        }
-        if s.isAdd {
-            let amt = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? (s.isPigment ? "g" : ""))" }
-            let pig = s.isPigment ? (store.snapshot?.pigment(s.pigmentId)?.name ?? "pigment") : nil
-            return [[amt, pig].compactMap { $0 }.joined(separator: " "), s.optional ? "optional" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        }
-        let kind = store.snapshot?.stepKinds.first { $0["code"].string == s.kind }?["name"].string ?? s.kind
-        return [kind, s.defaultSeconds.map(Duration.format), s.tray.map { "tray \($0)" },
-                s.defaultTemp.map { "\($0.formatted()) °C" }, s.timed ? nil : "no timer", s.optional ? "optional" : nil, s.perLayer ? "per layer" : nil]
-            .compactMap { $0 }.joined(separator: " · ")
-    }
+    private func summary(_ s: StepEdit) -> String { store.snapshot?.summary(s) ?? "" }
 
     private func save() {
         if let blank = edit.steps.firstIndex(where: { $0.name.trimmingCharacters(in: .whitespaces).isEmpty }) {
@@ -278,100 +303,97 @@ struct StepEditView: View {
     let stepId: UUID
     var body: some View {
         if let i = edit.steps.firstIndex(where: { $0.id == stepId }) {
-            StepForm(step: $edit.steps[i], earlier: edit.steps.prefix(i).filter { !$0.isSelect })
+            StepForm(step: $edit.steps[i], number: i + 1, earlier: edit.steps.prefix(i).filter { !$0.isSelect })
         }
     }
 }
 
-/// One step's settings.
+/// The Step Selection: the eight types and the kind stored for each.
+private enum StepType: String, CaseIterable, Identifiable {
+    case exposure, timer, todo, important, add, select, bath, dry
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .exposure: "EXPOSURE"; case .timer: "TIMER"; case .todo: "TO-DO"; case .important: "IMPORTANT"
+        case .add: "ADD + MEASURE"; case .select: "SELECT MATERIAL"; case .bath: "BATH"; case .dry: "DRY"
+        }
+    }
+    var kind: String {
+        switch self {
+        case .todo: "do"
+        default: rawValue
+        }
+    }
+    init(kind: String) {
+        switch kind {
+        case "exposure", "light": self = .exposure
+        case "timer", "wait": self = .timer
+        case "add": self = .add
+        case "select": self = .select
+        case "bath", "rinse", "chemical_fog": self = .bath
+        case "dry": self = .dry
+        case "important": self = .important
+        default: self = .todo
+        }
+    }
+}
+
+/// One step's settings: number and title, the type, then what that type needs.
 struct StepForm: View {
     @Environment(AppStore.self) private var store
     @Binding var step: StepEdit
+    let number: Int
     let earlier: [StepEdit]
+
+    private var type: StepType { StepType(kind: step.kind) }
+    /// A batch list can't share a page with a timer.
+    private var noTimer: Bool { step.isSelect && step.selectWhat == "chemistry" }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Field(label: "Name") { TextField("", text: $step.name) }
-                Field(label: "Kind") {
-                    Picker("Kind", selection: Binding(get: { step.kind }, set: { step.kind = $0; if $0 == "do" { step.timed = false } })) {
-                        ForEach(kinds, id: \.code) { Text($0.name).tag($0.code) }
-                    }.pickerStyle(.menu).labelsHidden()
+                HStack(alignment: .bottom, spacing: 10) {
+                    Text("\(number).").font(Theme.display(40)).foregroundStyle(Theme.red)
+                    Field(label: "Title") { TextField("", text: $step.name) }
                 }
-                if step.isAdd {
-                    HStack(spacing: 10) {
-                        Field(label: "Amount") { NumberField(value: $step.defaultAmount) }
-                        Field(label: "Unit") { TextField("g, mL…", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
-                    }
-                    Field(label: "Pigment") {
-                        Picker("Pigment", selection: pigmentChoice) {
-                            Text("— not a pigment —").tag(String?.none)
-                            Text("Any pigment (choose on the day)").tag(Optional("any"))
-                            ForEach(store.snapshot?.pigments ?? []) { Text($0.name).tag(Optional(String($0.id))) }
-                        }.pickerStyle(.menu).labelsHidden()
-                    }
-                }
-                // A choose step is only the list; any other step can also choose
-                // one (the support paper on "Soak final support", say).
-                if !step.isAdd {
-                Field(label: step.isSelect ? "Choose" : "Also choose") {
-                    // The built-in lists, then the owner's own kinds ("mk:3").
-                    Picker("Choose", selection: choice) {
-                        Text("—").tag(String?.none)
-                        ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
-                        if let w = step.selectWhat, SelectWhat(rawValue: w) == nil, w != "chemistry", step.materialKindId == nil {
-                            Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
+                Text("STEP SELECTION").font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                    ForEach(StepType.allCases) { t in
+                        Button { pick(t) } label: {
+                            Text(t.label).font(Theme.label.weight(.bold)).multilineTextAlignment(.center)
+                                .lineLimit(2).minimumScaleFactor(0.6)
+                                .foregroundStyle(type == t ? Theme.onRed : .black)
+                                .frame(maxWidth: .infinity, minHeight: 54).padding(.horizontal, 2)
+                                .background(type == t ? Theme.red : Theme.box, in: .rect(cornerRadius: 8))
                         }
-                        if step.isSelect { Text("Chemistry batch").tag(Optional("chemistry")) }
-                        ForEach(store.snapshot?.materialKinds ?? []) { Text($0.name).tag(Optional("mk:\($0.id)")) }
-                    }.pickerStyle(.menu).labelsHidden()
-                }
-                }
-                if step.isSelect && step.selectWhat == "chemistry" {
-                    Field(label: "Batch type") {
-                        Picker("Batch type", selection: $step.chemistryTypeId) {
-                            Text("Any").tag(Int?.none)
-                            ForEach(chemTypes, id: \.id) { Text($0.name).tag(Optional($0.id)) }
-                        }.pickerStyle(.menu).labelsHidden()
+                        .buttonStyle(.plain)
                     }
                 }
-                if !step.isSelect {
-                    Toggle("Timer (off: do it, then Next)", isOn: $step.timed).font(Theme.body.weight(.semibold)).tint(Theme.red)
+                if noTimer {
+                    Text("A step that chooses a batch can't also have a timer.").font(Theme.small).foregroundStyle(Theme.dim)
+                } else {
+                    Toggle("Timer", isOn: $step.timed).font(Theme.body.weight(.semibold)).tint(Theme.red)
                 }
-                if !step.isSelect && step.timed {
+                if step.timed && !noTimer {
                     OptionalTime(label: "Default time", none: "None — the timer counts up", seconds: $step.defaultSeconds)
                     HStack(alignment: .top, spacing: 10) {
                         OptionalTime(label: "Shortest", none: "No limit", seconds: $step.minSeconds, compact: true)
                         OptionalTime(label: "Longest", none: "No limit", seconds: $step.maxSeconds, compact: true)
                     }
                 }
-                if !step.isSelect {
-                    HStack(spacing: 10) {
-                        Field(label: "Tray") { NumberField(value: Binding(get: { step.tray.map(Double.init) }, set: { step.tray = $0.map { Int($0) } }), whole: true) }
-                        Field(label: "Temp °C") { NumberField(value: $step.defaultTemp) }
-                    }
-                    Field(label: "Chemistry") {
-                        Picker("Chemistry", selection: $step.chemistryTypeId) {
-                            Text("—").tag(Int?.none)
-                            ForEach(chemTypes, id: \.id) { Text($0.name).tag(Optional($0.id)) }
-                        }.pickerStyle(.menu).labelsHidden()
-                    }
-                    if !earlier.isEmpty {
-                        Field(label: "Same batch as") {
-                            Picker("Same batch as", selection: $step.sameAs) {
-                                Text("—").tag(UUID?.none)
-                                ForEach(earlier) { Text($0.name).tag(Optional($0.id)) }
-                            }.pickerStyle(.menu).labelsHidden()
-                        }
-                    }
+                switch type {
+                case .exposure:
+                    flag("Light re-exposure (no negative)", Binding(get: { step.kind == "light" }, set: { step.kind = $0 ? "light" : "exposure" }))
+                case .bath: bathFields
+                case .dry:
+                    Field(label: "Room humidity %") { NumberField(value: $step.defaultHumidity) }
+                case .add: addFields
+                case .select: chooser(label: "Choose")
+                case .timer, .todo, .important: EmptyView()
                 }
                 VStack(spacing: 0) {
                     flag("Optional (can be skipped)", $step.optional)
                     flag("Once per layer", $step.perLayer)
-                    if !step.isSelect {
-                        flag("Ask the temperature", $step.asksTemp)
-                        flag("Record pH", $step.recordsPh)
-                    }
                     flag("Room lights can go on after", $step.lightsOkAfter)
                 }
                 Field(label: "Directions shown on the step") {
@@ -389,6 +411,88 @@ struct StepForm: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    private func pick(_ t: StepType) {
+        step.kind = t.kind
+        if t == .timer { step.timed = true }
+        if t == .todo || t == .important || t == .select { step.timed = false }
+        if t == .bath, step.bathTypeId == nil { step.bathTypeId = store.snapshot?.bathTypes.first?.id }
+    }
+
+    @ViewBuilder private var bathFields: some View {
+        Field(label: "Bath") {
+            Picker("Bath", selection: $step.bathTypeId) {
+                ForEach(store.snapshot?.bathTypes ?? [], id: \.id) { Text($0.name).tag(Optional($0.id)) }
+            }.pickerStyle(.menu).labelsHidden()
+        }
+        HStack(spacing: 10) {
+            Field(label: "Temp °C") { NumberField(value: $step.defaultTemp) }
+            Field(label: "Tray") { NumberField(value: Binding(get: { step.tray.map(Double.init) }, set: { step.tray = $0.map { Int($0) } }), whole: true) }
+        }
+        VStack(spacing: 0) {
+            flag("Ask the temperature", $step.asksTemp)
+            flag("Record pH", $step.recordsPh)
+        }
+        chemistry
+        chooser(label: "Also choose")
+    }
+
+    @ViewBuilder private var addFields: some View {
+        HStack(spacing: 10) {
+            Field(label: "Amount") { NumberField(value: $step.defaultAmount) }
+            Field(label: "Unit") { TextField("g, mL…", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
+        }
+        chemistry
+        Field(label: "Pigment") {
+            Picker("Pigment", selection: pigmentChoice) {
+                Text("— not a pigment —").tag(String?.none)
+                Text("Any pigment (choose on the day)").tag(Optional("any"))
+                ForEach(store.snapshot?.pigments ?? []) { Text($0.name).tag(Optional(String($0.id))) }
+            }.pickerStyle(.menu).labelsHidden()
+        }
+        if !step.isPigment { chooser(label: "Choose") }
+    }
+
+    /// A chemistry type: the walk then lists those batches, with + New.
+    @ViewBuilder private var chemistry: some View {
+        Field(label: "Chemistry") {
+            Picker("Chemistry", selection: $step.chemistryTypeId) {
+                Text("—").tag(Int?.none)
+                ForEach(chemTypes, id: \.id) { Text($0.name).tag(Optional($0.id)) }
+            }.pickerStyle(.menu).labelsHidden()
+        }
+        if !earlier.isEmpty {
+            Field(label: "Same batch as") {
+                Picker("Same batch as", selection: $step.sameAs) {
+                    Text("—").tag(UUID?.none)
+                    ForEach(earlier) { Text($0.name).tag(Optional($0.id)) }
+                }.pickerStyle(.menu).labelsHidden()
+            }
+        }
+    }
+
+    /// The built-in lists, the batches, then the owner's own kinds ("mk:3").
+    @ViewBuilder private func chooser(label: String) -> some View {
+        Field(label: label) {
+            Picker(label, selection: choice) {
+                Text("—").tag(String?.none)
+                ForEach(SelectWhat.allCases, id: \.self) { Text($0.noun.capitalized).tag(Optional($0.rawValue)) }
+                if let w = step.selectWhat, SelectWhat(rawValue: w) == nil, w != "chemistry", w != "pigment", step.materialKindId == nil {
+                    Text(w.replacingOccurrences(of: "_", with: " ").capitalized).tag(Optional(w))
+                }
+                if step.isSelect { Text("Chemistry batch").tag(Optional("chemistry")) }
+                ForEach(store.snapshot?.materialKinds ?? []) { Text($0.name).tag(Optional("mk:\($0.id)")) }
+            }.pickerStyle(.menu).labelsHidden()
+        }
+        if step.isSelect && step.selectWhat == "chemistry" {
+            Field(label: "Batch type") {
+                Picker("Batch type", selection: $step.chemistryTypeId) {
+                    Text("Any").tag(Int?.none)
+                    ForEach(chemTypes, id: \.id) { Text($0.name).tag(Optional($0.id)) }
+                }.pickerStyle(.menu).labelsHidden()
+            }
+        }
+    }
+
     /// "any" or a pigment id: the step lists pigments; nil: a plain amount.
     private var pigmentChoice: Binding<String?> {
         Binding(get: { step.isPigment ? (step.pigmentId.map(String.init) ?? "any") : nil },
@@ -399,15 +503,11 @@ struct StepForm: View {
         Binding(get: { step.materialKindId.map { "mk:\($0)" } ?? step.selectWhat },
                 set: { v in
                     if let v, v.hasPrefix("mk:") { step.materialKindId = Int(v.dropFirst(3)); step.selectWhat = nil }
-                    else { step.materialKindId = nil; step.selectWhat = v }
+                    else {
+                        step.materialKindId = nil; step.selectWhat = v
+                        if v == "chemistry" { step.timed = false }
+                    }
                 })
-    }
-
-    private var kinds: [(code: String, name: String)] {
-        var k = (store.snapshot?.stepKinds ?? []).filter { !$0["archived"].flag }
-            .compactMap { j in j["code"].string.map { ($0, j["name"].string ?? $0) } }
-        if !k.contains(where: { $0.0 == step.kind }) { k.append((step.kind, step.kind)) }
-        return k.map { (code: $0.0, name: $0.1) }
     }
 
     private var chemTypes: [(id: Int, name: String)] {

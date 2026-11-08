@@ -79,6 +79,8 @@ struct ListSpec: Identifiable, Hashable {
            rowSub: { j in [Pigment(j).short, j["maker"].string].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "chemistry_types", title: "Chemistry types", fields: [.init(key: "name", label: "Name", kind: .text)],
                  required: ["name"], archives: false, rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil }),
+        ListSpec(id: "bath_type", title: "Bath types", fields: [.init(key: "name", label: "Name", kind: .text)],
+                 required: ["name"], archives: true, rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil }),
         ListSpec(id: "negative_types", title: "Negative types", fields: [.init(key: "name", label: "Name", kind: .text)],
                  required: ["name"], archives: false, rowTitle: { $0["name"].string ?? "" }, rowSub: { _ in nil }),
         ListSpec(id: "photo_types", title: "Kinds of print", fields: [

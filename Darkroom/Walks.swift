@@ -63,6 +63,7 @@ final class Walks {
     /// The walk-through that carries on from what was just made: a tissue from
     /// a glop batch, a print from a tissue.
     func next(after m: Made) -> Preset? {
+        if let linked = store.snapshot?.nextPreset(after: m.presetId) { return linked }
         let ps = store.snapshot?.presets ?? []
         if m.makes == "tissue" {
             let prints = ps.filter { $0.makesPrint && $0.steps.contains { $0.selectWhat == .carbon_tissue } }

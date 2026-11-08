@@ -361,6 +361,24 @@ struct PigmentBlock: View {
     }
 }
 
+/// An Important step: a banner that flashes, then stays lit, so it isn't missed.
+struct ImportantBanner: View {
+    @State private var opened = Date.now
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
+            let t = ctx.date.timeIntervalSince(opened)
+            let lit = t > 3 || Int(t * 4) % 2 == 0
+            Text("IMPORTANT").font(Theme.display(46)).tracking(4)
+                .foregroundStyle(lit ? Theme.onRed : Theme.red)
+                .frame(maxWidth: .infinity, minHeight: 90)
+                .background(lit ? Theme.red : Theme.bg, in: .rect(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.red, lineWidth: 4))
+        }
+        .sensoryFeedback(.warning, trigger: opened)
+        .accessibilityLabel("Important")
+    }
+}
+
 struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
@@ -379,6 +397,7 @@ struct StepPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if step.isImportant { ImportantBanner() }
             Title(text: step.name)
             Note(text: step.notes)
             if step.isPigment { PigmentBlock(model: model, step: step).onAppear { model.keepDefaults() } }
@@ -411,6 +430,11 @@ struct StepPage: View {
                     Field(label: "pH") {
                         TextField("", text: $ph).keyboardType(.decimalPad)
                             .onChange(of: ph) { _, v in model.rec.ph = Double(v.replacingOccurrences(of: ",", with: ".")) }
+                    }
+                }
+                if step.isDry {
+                    Field(label: "Room humidity %") {
+                        NumberField(value: Binding(get: { model.rec.humidity }, set: { model.rec.humidity = $0 }))
                     }
                 }
                 if step.isExposure {

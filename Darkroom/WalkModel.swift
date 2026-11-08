@@ -83,6 +83,7 @@ final class WalkModel {
             // Add steps start from the recipe; changing them changes only today's.
             if s.isPigment { r.pigments = [PigLine(pigmentId: s.pigmentId, grams: s.defaultAmount)] }
             else if s.isAdd { r.amount = s.defaultAmount }
+            else if s.isDry { r.humidity = s.defaultHumidity }
         }
         return r
     }

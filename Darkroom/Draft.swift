@@ -12,6 +12,7 @@ struct StepRecord: Codable, Equatable {
     var timer = StepTimer()
     var manual: Int?            // typed time, seconds
     var temp: Double?
+    var humidity: Double?       // dry steps: the room, %
     var ph: Double?
     var chemistryId: Int?
     var materialId: Int?        // one of the owner's own kinds; below 0 = added on the phone, not sent yet
@@ -182,7 +183,7 @@ extension PrintDraft {
                 "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "amount": r.skipped ? .null : .from(amount), "unit": .from(s.isAdd ? s.unitShown : nil),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
-                "temp": .from(r.temp), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
+                "temp": .from(r.temp), "humidity": .from(r.humidity), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
         }
         let name = (label ?? "").isEmpty ? suggestedId(snap) : label!
@@ -210,7 +211,7 @@ extension PrintDraft {
                 "process_step_id": .from(s.id), "layer_no": .from(self.layer), "name": .string(s.name),
                 "kind": .string(s.kind), "tray": .from(s.tray), "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
-                "temp": .from(r.temp), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
+                "temp": .from(r.temp), "humidity": .from(r.humidity), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
         }
         // This layer: its materials and walk-through. The server changes only

@@ -12,6 +12,15 @@ struct Snapshot: Codable, Equatable {
     /// Processes in the order set on the website.
     var processRows: [JSON] { raw["processes"].array }
     var walkStages: [JSON] { raw["walk_stages"].array }
+    /// The sub-types a Bath step can be: Fog, Develop… (editable).
+    var bathTypes: [(id: Int, name: String)] {
+        raw["bath_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
+    }
+    /// The walk a stage goes on to when its own is finished, if one is set.
+    func nextPreset(after id: Int?) -> Preset? {
+        guard let stage = walkStages.first(where: { $0["preset_id"].int == id }), let n = stage["next_section_id"].int else { return nil }
+        return preset(walkStages.first { $0["id"].int == n }?["preset_id"].int)
+    }
     var batches: [Batch] { raw["chemistry"].array.map(Batch.init).filter { !$0.archived } }
     var papers: [Paper] { raw["papers"].array.map(Paper.init).filter { !$0.archived } }
     var chemistryTypes: [(id: Int, name: String)] {
@@ -54,8 +63,10 @@ struct PhotoType: Identifiable, Equatable {
 struct Preset: Identifiable, Equatable {
     let id: Int, photoTypeId: Int, name: String, isDefault: Bool, archived: Bool, steps: [Step]
     let makes: String, chemistryTypeId: Int?, stageId: Int?, sortOrder: Int
+    /// Starred: a shortcut on the start page.
+    let favourite: Bool
     init(_ j: JSON) {
-        stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0
+        stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0; favourite = j["favourite"].flag
         id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
         makes = j["makes"].string ?? "print"; chemistryTypeId = j["chemistry_type_id"].int
         isDefault = j["is_default"].flag; archived = j["archived"].flag
@@ -119,12 +130,14 @@ struct Step: Identifiable, Equatable, Hashable {
     let selectRaw: String?
     /// Add / measure steps: the recipe's amount, its unit, the usual pigment.
     let defaultAmount: Double?, unit: String?, pigmentId: Int?
+    /// Dry steps: the usual room humidity, %.
+    let defaultHumidity: Double?
 
     init(_ j: JSON) {
         id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
         selectWhat = j["select_what"].string.flatMap(SelectWhat.init(rawValue:))
         materialKindId = j["material_kind_id"].int
-        timed = kind != "do" && (j["timed"] == .null ? true : j["timed"].flag)
+        timed = j["timed"] == .null ? true : j["timed"].flag
         perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
         chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
@@ -132,8 +145,11 @@ struct Step: Identifiable, Equatable, Hashable {
         notes = j["notes"].string; sameAsStepId = j["same_as_step_id"].int; archived = j["archived"].flag
         selectRaw = j["select_what"].string
         defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
+        defaultHumidity = j["default_humidity"].double
     }
 
+    var isImportant: Bool { kind == "important" }
+    var isDry: Bool { kind == "dry" }
     var isSelect: Bool { kind == "select" }
     var isExposure: Bool { kind == "exposure" }
     /// A page with a timer: not a choice, and not a "do this, then Next" step.

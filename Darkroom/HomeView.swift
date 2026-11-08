@@ -63,8 +63,8 @@ struct HomeView: View {
     @State private var confirmSignOut = false
     @State private var editing = false
     @State private var settings = false
-    /// Which of the two start buttons is open; kept between launches.
-    @AppStorage("homeOpen") private var openPart = "walk"
+    /// Which of the start buttons is open; kept between launches.
+    @AppStorage("homeOpenPart") private var openPart = "proc"
     @State private var editOn: RecipeId?
     @State private var path = NavigationPath()
 
@@ -106,11 +106,11 @@ struct HomeView: View {
         // A batch or tissue just made: carry straight on with it.
         .alert(madeTitle, isPresented: Binding(get: { store.made != nil && !walks.isOpen }, set: { if !$0 { store.made = nil } })) {
             if let m = store.made, let p = walks.next(after: m) {
-                Button(m.makes == "tissue" ? "Make a print" : "Pour a tissue") { store.made = nil; walks.start(preset: p, made: m) }
+                Button("Go on: \(p.name)") { store.made = nil; walks.start(preset: p, made: m) }
             }
             Button("Not now", role: .cancel) { store.made = nil }
         } message: {
-            Text(store.made.map { $0.makes == "tissue" ? "Make a print with \($0.label) now?" : "Pour a tissue from \($0.label) now?" } ?? "")
+            Text(store.made.map { m in walks.next(after: m).map { "Go on to \($0.name) with \(m.label) now?" } ?? "" } ?? "")
         }
         .sheet(isPresented: $settings) { SettingsView() }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
@@ -120,7 +120,7 @@ struct HomeView: View {
         }
     }
 
-    /// The two start buttons, then the prints, then any still in progress.
+    /// Favourites and walks in progress, the start buttons, then the prints.
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -139,12 +139,12 @@ struct HomeView: View {
             }
             statusLine
 
-            part("walk", "WALKTHROUGH")
-            if openPart == "walk" { walkthroughs }
+            if !favourites.isEmpty { favouriteRows }
+            if !open.isEmpty { inProgress }
             part("proc", "PROCESSES")
             if openPart == "proc" { ProcessesList().padding(.leading, 8) }
             part("chem", "CHEMISTRY")
-            if openPart == "chem" { makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types")]) }
+            if openPart == "chem" { makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types"), .of("bath_type")]) }
             part("mat", "MATERIALS")
             if openPart == "mat" {
                 makeButtons("tissue")
@@ -154,23 +154,41 @@ struct HomeView: View {
             }
 
             PrintsGrid(reload: store.snapshot?.fetchedAt).padding(.top, 8)
+        }
+    }
 
-            if !open.isEmpty {
-                Text("IN PROGRESS").font(Theme.label).tracking(2).foregroundStyle(Theme.dim).padding(.top, 8)
-                VStack(spacing: 10) {
-                    ForEach(open) { d in
-                        Button { walks.resume(d) } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(store.name(d)).font(Theme.body.weight(.semibold))
-                                Text(store.progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(WalkButtonStyle())
-                    }
+    private var favourites: [Preset] { (store.snapshot?.presets ?? []).filter(\.favourite) }
+
+    /// Starred walks: one tap to begin.
+    private var favouriteRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("FAVOURITES").font(Theme.label).tracking(2).foregroundStyle(Theme.bright)
+            ForEach(favourites) { p in
+                Button { walks.start(preset: p) } label: {
+                    Label(p.name, systemImage: "figure.run").minimumScaleFactor(0.7).frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(NextButtonStyle(compact: true))
             }
         }
+        .padding(.leading, 8)
+    }
+
+    /// Walks still going, which can take days: always in view at the top.
+    private var inProgress: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("IN PROGRESS").font(Theme.label).tracking(2).foregroundStyle(Theme.bright)
+            ForEach(open) { d in
+                Button { walks.resume(d) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(store.name(d)).font(Theme.body.weight(.semibold))
+                        Text(store.progress(d)).font(Theme.small).foregroundStyle(Theme.dim)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(WalkButtonStyle(on: true))
+            }
+        }
+        .padding(.leading, 8)
     }
 
     private func part(_ key: String, _ title: String) -> some View {
@@ -189,17 +207,21 @@ struct HomeView: View {
         store.made.map { $0.makes == "tissue" ? "Tissue \($0.label) saved" : "Batch \($0.label) saved" } ?? ""
     }
 
-    /// ▶ each glop or tissue walk-through, and Edit recipe: the recipe is
+    /// ▶ each glop or tissue walk-through, with a pencil to edit its recipe: the recipe is
     /// changed here; a walk only records what was done that day.
     private func makeButtons(_ makes: String) -> some View {
         VStack(spacing: 8) {
             ForEach((store.snapshot?.presets ?? []).filter { $0.makes == makes }) { p in
                 HStack(spacing: 8) {
+                    Button { editOn = RecipeId(id: p.id) } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Theme.red).frame(width: 40, height: 54)
+                    }
+                    .accessibilityLabel("Edit recipe")
                     Button { walks.start(preset: p) } label: {
-                        Text("▶ " + (makes == "chemistry" ? "Make \(p.name)" : p.name)).frame(maxWidth: .infinity)
+                        Text("▶ " + (makes == "chemistry" ? "Make \(p.name)" : p.name)).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(NextButtonStyle(compact: true))
-                    Button("Edit recipe") { editOn = RecipeId(id: p.id) }.buttonStyle(WalkButtonStyle())
                 }
             }
         }
@@ -220,17 +242,6 @@ struct HomeView: View {
                 }
                 .buttonStyle(WalkButtonStyle())
             }
-        }
-        .padding(.leading, 8)
-    }
-
-    /// Process, stage, walk: tap a walk to begin it. Opens on the last print's walk.
-    private var walkthroughs: some View {
-        WalkTreeView(tree: WalkTree.build(store.snapshot), openOn: store.snapshot.flatMap { snap in
-            snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int ?? snap.presets.first(where: \.isDefault)?.id
-        }) { p in
-            Button("▶ " + p.name) { walks.start(preset: p) }
-                .buttonStyle(TreeRowStyle(fill: Theme.walkBar, text: .black))
         }
         .padding(.leading, 8)
     }

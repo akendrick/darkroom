@@ -16,7 +16,7 @@ struct PendingMaterial: Codable, Equatable {
 /// A batch or tissue a finished walk made, once the server has it: home offers
 /// the next walk-through with it already chosen.
 struct Made: Equatable, Identifiable {
-    let makes: String, id: Int, label: String, typeId: Int?
+    let makes: String, id: Int, label: String, typeId: Int?, presetId: Int?
 }
 
 /// Everything the app keeps on the phone, and the queue of things to send.
@@ -359,7 +359,7 @@ final class AppStore {
         if now.finished, !now.unsent, let madeId {
             listsChanged = true
             let label = body["label"].string ?? ""
-            made = Made(makes: now.makes ?? "chemistry", id: madeId, label: label, typeId: snapshot?.preset(now.presetId)?.chemistryTypeId)
+            made = Made(makes: now.makes ?? "chemistry", id: madeId, label: label, typeId: snapshot?.preset(now.presetId)?.chemistryTypeId, presetId: now.presetId)
         }
         save()
     }
