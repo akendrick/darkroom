@@ -9,6 +9,9 @@ struct Snapshot: Codable, Equatable {
     var photoTypes: [PhotoType] { raw["photo_types"].array.map(PhotoType.init) }
     var stepKinds: [JSON] { raw["step_kinds"].array }
     var presets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    /// Processes in the order set on the website.
+    var processRows: [JSON] { raw["processes"].array }
+    var walkStages: [JSON] { raw["walk_stages"].array }
     var batches: [Batch] { raw["chemistry"].array.map(Batch.init).filter { !$0.archived } }
     var papers: [Paper] { raw["papers"].array.map(Paper.init).filter { !$0.archived } }
     var chemistryTypes: [(id: Int, name: String)] {
@@ -50,31 +53,41 @@ struct PhotoType: Identifiable, Equatable {
 /// type (glop) or a carbon tissue.
 struct Preset: Identifiable, Equatable {
     let id: Int, photoTypeId: Int, name: String, isDefault: Bool, archived: Bool, steps: [Step]
-    let makes: String, chemistryTypeId: Int?
+    let makes: String, chemistryTypeId: Int?, stageId: Int?, sortOrder: Int
     init(_ j: JSON) {
+        stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0
         id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
         makes = j["makes"].string ?? "print"; chemistryTypeId = j["chemistry_type_id"].int
         isDefault = j["is_default"].flag; archived = j["archived"].flag
         steps = j["steps"].array.map(Step.init).filter { !$0.archived }
     }
-    /// Which list it sits in: "p:3" a print type, "c:8" a chemistry type, "t" tissue.
-    var group: String { makes == "chemistry" ? "c:\(chemistryTypeId ?? 0)" : makes == "tissue" ? "t" : "p:\(photoTypeId)" }
     var makesPrint: Bool { makes == "print" }
 }
 
-/// A row of walk-throughs on the start page and the home screen.
-struct WalkGroup: Identifiable, Equatable {
-    let id: String, name: String
-    /// Prints first, then chemistry recipes, then tissue; only those with a walk-through.
-    static func all(_ snap: Snapshot?) -> [WalkGroup] {
+/// Walks as they are organised on the website: process, stage, walk.
+enum WalkTree {
+    struct Stage: Identifiable { let id: Int, name: String, walks: [Preset] }
+    /// `loose` is what isn't filed under a stage; only "Not filed yet" has any.
+    struct Proc: Identifiable { let id: Int, name: String, stages: [Stage], loose: [Preset] }
+
+    /// Empty stages and processes are left out.
+    static func build(_ snap: Snapshot?, only: (Preset) -> Bool = { _ in true }) -> [Proc] {
         guard let snap else { return [] }
-        let ps = snap.presets
-        var gs = snap.photoTypes.map { WalkGroup(id: "p:\($0.id)", name: $0.name) }
-        for p in ps where p.makes == "chemistry" && !gs.contains(where: { $0.id == p.group }) {
-            gs.append(WalkGroup(id: p.group, name: snap.chemistryTypeName(p.chemistryTypeId) ?? "Chemistry"))
+        let walks = snap.presets.filter(only).sorted { ($0.sortOrder, $0.id) < ($1.sortOrder, $1.id) }
+        var filed = Set<Int>()
+        var tree: [Proc] = snap.processRows.compactMap { p in
+            guard let id = p["id"].int else { return nil }
+            let stages: [Stage] = snap.walkStages.filter { $0["process_id"].int == id }.compactMap { s in
+                guard let sid = s["id"].int else { return nil }
+                let ws = walks.filter { $0.stageId == sid }
+                return ws.isEmpty ? nil : Stage(id: sid, name: s["name"].string ?? "", walks: ws)
+            }
+            stages.forEach { $0.walks.forEach { filed.insert($0.id) } }
+            return stages.isEmpty ? nil : Proc(id: id, name: p["name"].string ?? "", stages: stages, loose: [])
         }
-        gs.append(WalkGroup(id: "t", name: "Carbon tissue"))
-        return gs.filter { g in ps.contains { $0.group == g.id } }
+        let loose = walks.filter { !filed.contains($0.id) }
+        if !loose.isEmpty { tree.append(Proc(id: 0, name: "Not filed yet", stages: [], loose: loose)) }
+        return tree
     }
 }
 

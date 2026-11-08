@@ -89,19 +89,12 @@ final class WalkModel {
 
     // MARK: Start page
 
-    /// Prints by kind, then the chemistry recipes, then tissue.
-    var groups: [WalkGroup] { WalkGroup.all(snap).filter { draft.layer == 1 || $0.id.hasPrefix("p:") } }
-    var group: String? { preset?.group }
-    var presetsInGroup: [Preset] { (snap?.presets ?? []).filter { $0.group == group } }
+    /// A later layer of a print is walked with print walks only.
+    var walkTree: [WalkTree.Proc] { WalkTree.build(snap) { draft.layer == 1 || $0.makesPrint } }
     /// The walk-through can't change once something is recorded; a new layer
     /// picks its own until then.
     var locked: Bool { draft.recordId != nil && !(draft.newLayer == true && draft.recs.isEmpty) }
 
-    func pickGroup(_ g: String) {
-        let ps = (snap?.presets ?? []).filter { $0.group == g }
-        guard let p = ps.first(where: \.isDefault) ?? ps.first else { return }
-        pickPreset(p.id)
-    }
     func pickPreset(_ id: Int) {
         guard let p = snap?.preset(id) else { return }
         var d = draft

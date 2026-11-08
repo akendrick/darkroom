@@ -113,7 +113,7 @@ struct PrintEditor: View {
                 }
             }
             .fullScreenCover(isPresented: $camera) {
-                CameraView { img in camera = false; if let img { newPhoto = img } }.ignoresSafeArea()
+                CameraView(note: { error = $0 }) { img in camera = false; if let img { newPhoto = img } }.ignoresSafeArea()
             }
         }
         .tint(Theme.red)

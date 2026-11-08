@@ -386,6 +386,7 @@
 				INFOPLIST_FILE = "Config/Darkroom-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Takes a photo of the print for its journal entry.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Saves a full-size HEIC copy of photos you take of your prints.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -417,6 +418,7 @@
 				INFOPLIST_FILE = "Config/Darkroom-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Darkroom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Takes a photo of the print for its journal entry.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Saves a full-size HEIC copy of photos you take of your prints.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

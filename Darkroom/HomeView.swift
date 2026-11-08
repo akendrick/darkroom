@@ -65,7 +65,6 @@ struct HomeView: View {
     @State private var settings = false
     /// Which of the two start buttons is open; kept between launches.
     @AppStorage("homeOpen") private var openPart = "walk"
-    @State private var openType: String?
     @State private var editOn: RecipeId?
     @State private var path = NavigationPath()
 
@@ -225,47 +224,15 @@ struct HomeView: View {
         .padding(.leading, 8)
     }
 
-    /// Each kind of print with its walk-throughs: tap one, then Begin.
+    /// Process, stage, walk: tap a walk to begin it. Opens on the last print's walk.
     private var walkthroughs: some View {
-        VStack(spacing: 10) {
-            ForEach(WalkGroup.all(store.snapshot)) { t in
-                let ps = (store.snapshot?.presets ?? []).filter { $0.group == t.id }
-                    .sorted { $0.isDefault && !$1.isDefault }
-                if !ps.isEmpty {
-                    Button { withAnimation(.snappy) { openType = openType == t.id ? nil : t.id } } label: {
-                        HStack {
-                            Text(t.name).font(Theme.body.weight(.bold))
-                            Spacer()
-                            Image(systemName: openType == t.id ? "chevron.down" : "chevron.right").font(.body.weight(.bold))
-                        }
-                    }
-                    .buttonStyle(WalkButtonStyle(on: openType == t.id))
-                    if openType == t.id {
-                        VStack(spacing: 8) {
-                            ForEach(ps) { p in
-                                Button { walks.start(preset: p) } label: {
-                                    VStack(spacing: 2) {
-                                        Text("▶ Begin walkthrough")
-                                        if ps.count > 1 { Text(p.name).font(Theme.small) }
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(NextButtonStyle(compact: true))
-                            }
-                        }
-                        .padding(.leading, 16)
-                    }
-                }
-            }
+        WalkTreeView(tree: WalkTree.build(store.snapshot), openOn: store.snapshot.flatMap { snap in
+            snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int ?? snap.presets.first(where: \.isDefault)?.id
+        }) { p in
+            Button("▶ " + p.name) { walks.start(preset: p) }
+                .buttonStyle(TreeRowStyle(fill: Theme.walkBar, text: .black))
         }
         .padding(.leading, 8)
-        .onAppear {
-            // Open on the kind the last print was.
-            if openType == nil, let snap = store.snapshot {
-                let last = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
-                openType = snap.preset(last)?.group ?? snap.presets.first(where: \.isDefault)?.group
-            }
-        }
     }
 
     private var statusLine: some View {

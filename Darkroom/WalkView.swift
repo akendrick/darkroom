@@ -1,5 +1,8 @@
 import PhotosUI
 import SwiftUI
+import Photos
+import ImageIO
+import UniformTypeIdentifiers
 
 struct WalkView: View {
     @Bindable var model: WalkModel
@@ -95,10 +98,12 @@ struct StartPage: View {
         VStack(alignment: .leading, spacing: 16) {
             Title(text: heading)
             Note(text: note)
-            FlowRow(model.groups, selected: model.group, label: \.name) { model.pickGroup($0.id) }
-                .disabled(model.locked)
-            FlowRow(model.presetsInGroup, selected: model.draft.presetId, label: { $0.name + ($0.isDefault ? " ★" : "") }) { model.pickPreset($0.id) }
-                .disabled(model.locked)
+            WalkTreeView(tree: model.walkTree, openOn: model.draft.presetId) { p in
+                let on = model.draft.presetId == p.id
+                Button(p.name + (p.isDefault ? " ★" : "")) { model.pickPreset(p.id) }
+                    .buttonStyle(TreeRowStyle(fill: on ? Theme.walkOn : Theme.walkBar, text: .black))
+                    .disabled(model.locked)
+            }
             if !model.draft.isMake && model.draft.layer == 1 {
                 Field(label: "Title") {
                     TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title)
@@ -744,7 +749,7 @@ struct PhotoButton: View {
             }
         }
         .fullScreenCover(isPresented: $camera) {
-            CameraView { img in camera = false; if let img { save(img) } }.ignoresSafeArea()
+            CameraView(note: { model.status = $0 }) { img in camera = false; if let img { save(img) } }.ignoresSafeArea()
         }
     }
 
@@ -756,19 +761,56 @@ struct PhotoButton: View {
 }
 
 struct CameraView: UIViewControllerRepresentable {
+    /// Told if the full-size copy could not go in Photos.
+    var note: (@MainActor (String) -> Void)? = nil
     let done: (UIImage?) -> Void
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let p = UIImagePickerController(); p.sourceType = .camera; p.delegate = context.coordinator; return p
     }
     func updateUIViewController(_ vc: UIImagePickerController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(done: done) }
+    func makeCoordinator() -> Coordinator { Coordinator(note: note, done: done) }
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let note: (@MainActor (String) -> Void)?
         let done: (UIImage?) -> Void
-        init(done: @escaping (UIImage?) -> Void) { self.done = done }
+        init(note: (@MainActor (String) -> Void)?, done: @escaping (UIImage?) -> Void) { self.note = note; self.done = done }
         func imagePickerController(_ p: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            done(info[.originalImage] as? UIImage)
+            let img = info[.originalImage] as? UIImage
+            if let img { PhotoKeeper.saveHEIC(img, metadata: info[.mediaMetadata] as? [AnyHashable: Any], note: note) }
+            done(img)
         }
         func imagePickerControllerDidCancel(_ p: UIImagePickerController) { done(nil) }
+    }
+}
+
+/// A photo taken in the app also goes into Photos full size, as HEIC, beside
+/// the 1800 px JPEG sent with the print.
+enum PhotoKeeper {
+    static func saveHEIC(_ img: UIImage, metadata: [AnyHashable: Any]?, note: (@MainActor (String) -> Void)?) {
+        nonisolated(unsafe) let meta = metadata
+        Task.detached(priority: .utility) {
+            guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
+                await note?("HEIC not kept: allow Photos for Darkroom in Settings"); return
+            }
+            guard let data = heic(img, metadata: meta) else { await note?("HEIC copy could not be made"); return }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    let r = PHAssetCreationRequest.forAsset()
+                    r.creationDate = .now
+                    r.addResource(with: .photo, data: data, options: nil)
+                }
+            } catch { await note?("HEIC not kept: \(error.localizedDescription)") }
+        }
+    }
+
+    /// Keeps the camera's EXIF and rotation when there are any.
+    private static func heic(_ img: UIImage, metadata: [AnyHashable: Any]?) -> Data? {
+        guard let metadata, let cg = img.cgImage else { return img.heicData() }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.heic.identifier as CFString, 1, nil) else { return nil }
+        var props = metadata
+        props[kCGImageDestinationLossyCompressionQuality] = 0.9
+        CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? out as Data : nil
     }
 }
 

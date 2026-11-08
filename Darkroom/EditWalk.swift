@@ -140,25 +140,22 @@ struct EditWalksView: View {
     }
 
     private var list: some View {
-            List {
-                ForEach(WalkGroup.all(store.snapshot)) { t in
-                    let ps = (store.snapshot?.presets ?? []).filter { $0.group == t.id }
-                    if !ps.isEmpty {
-                        Section {
-                            ForEach(ps) { p in
-                                NavigationLink(value: p.id) {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(p.name + (p.isDefault ? "  ★" : "")).font(Theme.body.weight(.bold))
-                                        Text("\(p.steps.count) steps").font(Theme.small).opacity(0.7)
-                                    }
-                                }
-                                .listRowBackground(Theme.box).foregroundStyle(.black)
+            ScrollView {
+                WalkTreeView(tree: WalkTree.build(store.snapshot), openOn: startOn) { p in
+                    NavigationLink(value: p.id) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(p.name + (p.isDefault ? "  ★" : ""))
+                                Text("\(p.steps.count) steps").font(Theme.small).opacity(0.7)
                             }
-                        } header: { Text(t.name.uppercased()).font(Theme.label).foregroundStyle(Theme.bright) }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                        }
                     }
+                    .buttonStyle(TreeRowStyle(fill: Theme.walkBar, text: .black))
                 }
+                .padding(16)
             }
-            .scrollContentBackground(.hidden)
             .background(Theme.bg)
             .navigationTitle("Walk-throughs")
             .navigationBarTitleDisplayMode(.inline)

@@ -33,6 +33,14 @@ enum Theme {
     /// Text on the big red buttons.
     static var onRed: Color { darkroom ? .black : .white }
 
+    /// The walk dropdowns, darkest (the process) to lightest (a walk).
+    static var procBar: Color { darkroom ? Color(red: 0.16, green: 0.01, blue: 0) : Color(red: 0.36, green: 0.06, blue: 0.03) }
+    static var procText: Color { darkroom ? red : .white }
+    static var stageBar: Color { darkroom ? Color(red: 0.4, green: 0.05, blue: 0.02) : red }
+    static var stageText: Color { darkroom ? bright : .white }
+    static var walkBar: Color { darkroom ? box : fill }
+    static var walkOn: Color { darkroom ? red : Color(red: 0.93, green: 0.66, blue: 0.62) }
+
     static func display(_ size: CGFloat) -> Font { .system(size: size, weight: .heavy).width(.condensed) }
     static let body = Font.system(.body, design: .monospaced)
     static let small = Font.system(.footnote, design: .monospaced)
@@ -50,6 +58,68 @@ struct WalkButtonStyle: ButtonStyle {
             .frame(minHeight: 54)
             .background(on || configuration.isPressed ? Theme.fill : Theme.bg, in: .rect(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red, lineWidth: 2))
+    }
+}
+
+/// A row of the walk dropdowns; `fill` and `text` say which level it is.
+struct TreeRowStyle: ButtonStyle {
+    let fill: Color, text: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.body.weight(.bold))
+            .foregroundStyle(text)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .background(fill.opacity(configuration.isPressed ? 0.75 : 1), in: .rect(cornerRadius: 10))
+    }
+}
+
+/// Nested dropdowns: process, its stages, each stage's walks. One process and
+/// one stage open at a time, starting on the walk `openOn`.
+struct WalkTreeView<Walk: View>: View {
+    let tree: [WalkTree.Proc]
+    var openOn: Int?
+    @ViewBuilder var walk: (Preset) -> Walk
+    @State private var openProc: Int?
+    @State private var openStage: Int?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(tree) { p in
+                bar(p.name, open: openProc == p.id, fill: Theme.procBar, text: Theme.procText) {
+                    openProc = openProc == p.id ? nil : p.id
+                    openStage = nil
+                }
+                if openProc == p.id {
+                    ForEach(p.stages) { s in
+                        bar(s.name, open: openStage == s.id, fill: Theme.stageBar, text: Theme.stageText) {
+                            openStage = openStage == s.id ? nil : s.id
+                        }
+                        .padding(.leading, 12)
+                        if openStage == s.id { ForEach(s.walks) { walk($0).padding(.leading, 24) } }
+                    }
+                    ForEach(p.loose) { walk($0).padding(.leading, 12) }
+                }
+            }
+        }
+        .onAppear {
+            guard openProc == nil, let id = openOn else { return }
+            for p in tree {
+                if p.loose.contains(where: { $0.id == id }) { openProc = p.id }
+                if let s = p.stages.first(where: { $0.walks.contains { $0.id == id } }) { openProc = p.id; openStage = s.id }
+            }
+        }
+    }
+
+    private func bar(_ name: String, open: Bool, fill: Color, text: Color, tap: @escaping () -> Void) -> some View {
+        Button { withAnimation(.snappy) { tap() } } label: {
+            HStack {
+                Text(name)
+                Spacer()
+                Image(systemName: open ? "chevron.down" : "chevron.right")
+            }
+        }
+        .buttonStyle(TreeRowStyle(fill: fill, text: text))
     }
 }
 
