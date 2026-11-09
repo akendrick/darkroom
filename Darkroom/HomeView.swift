@@ -69,8 +69,11 @@ struct HomeView: View {
     /// The title has gone up, so the bulb floats in its corner to bring it back.
     @State private var scrolledPast = false
     @Namespace private var partSpace
-    @State private var editOn: RecipeId?
     @State private var path = NavigationPath()
+    @State private var addingProcess = false
+    @State private var addingBatch = false
+    @State private var addingKind = false
+    @State private var chemistryOptions = false
 
     private var open: [PrintDraft] {
         store.drafts.values.filter { !$0.finished }.sorted { $0.updatedAt > $1.updatedAt }
@@ -98,7 +101,7 @@ struct HomeView: View {
                 }
                 .navigationDestination(for: ListSpec.self) { RowsView(spec: $0) }
         }
-        .environment(\.goHome) { path = NavigationPath(); editing = false; settings = false }
+        .environment(\.goHome) { path = NavigationPath(); editing = false; settings = false; chemistryOptions = false }
         .tint(Theme.red)
         #if DEBUG
         // Test runs: open a walk-through at its first timed step, with the first
@@ -117,7 +120,6 @@ struct HomeView: View {
         #endif
         .fullScreenCover(isPresented: Binding(get: { walks.isOpen }, set: { _ in })) { WalkHost() }
         .sheet(isPresented: $editing) { EditWalksView() }
-        .sheet(item: $editOn) { EditWalksView(startOn: $0.id) }
         // A batch or tissue just made: carry straight on with it.
         .alert(madeTitle, isPresented: Binding(get: { store.made != nil && !walks.isOpen }, set: { if !$0 { store.made = nil } })) {
             if let m = store.made, let p = walks.next(after: m) {
@@ -128,6 +130,8 @@ struct HomeView: View {
             Text(store.made.map { m in walks.next(after: m).map { "Go on to \($0.name) with \(m.label) now?" } ?? "" } ?? "")
         }
         .sheet(isPresented: $settings) { SettingsView() }
+        .sheet(isPresented: $chemistryOptions) { ChemistrySettings() }
+        .sheet(isPresented: $addingKind) { RowForm(spec: .materialKinds, row: nil) {} }
         .confirmationDialog("Sign out of this iPhone?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { Task { await store.signOut() } }
         } message: {
@@ -174,7 +178,7 @@ struct HomeView: View {
         }
     }
 
-    private static let parts = [(key: "walk", title: "WALKS"), (key: "proc", title: "PROCESSES"), (key: "chem", title: "CHEMISTRY"), (key: "mat", title: "MATERIALS")]
+    private static let parts = [(key: "walk", title: "DEVELOP"), (key: "proc", title: "PROCESSES"), (key: "chem", title: "CHEMISTRY"), (key: "mat", title: "MATERIALS")]
 
     @ViewBuilder private func partContent(_ key: String) -> some View {
         switch key {
@@ -185,11 +189,10 @@ struct HomeView: View {
                 Text("No favourites or walks in progress.").font(Theme.small).foregroundStyle(Theme.dim).padding(.leading, 8)
             }
         case "proc":
-            ProcessesList().padding(.leading, 8)
+            ProcessesList(adding: $addingProcess).padding(.leading, 8)
         case "chem":
-            makeButtons("chemistry"); lists([.of("chemistry"), .of("chemistry_types"), .of("bath_type")])
+            InlineRows(spec: .of("chemistry"), adding: $addingBatch).padding(.leading, 8)
         default:
-            makeButtons("tissue")
             lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
                   + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
                   + [.materialKinds])
@@ -255,13 +258,37 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 partIcon(key, size: 28)
                 Text(title).font(Theme.display(26)).tracking(2)
-                Spacer()
-                Image(systemName: openPart == key ? "chevron.down" : "chevron.right").font(.system(size: 18, weight: .heavy))
+                Spacer(minLength: key == "chem" ? 84 : 44)
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(NextButtonStyle(compact: true))
+        .overlay(alignment: .trailing) { partActions(key).padding(.trailing, 6) }
         .matchedGeometryEffect(id: key, in: partSpace)
+    }
+
+    /// The bar's + (add to this part) and, on Chemistry, its options.
+    @ViewBuilder private func partActions(_ key: String) -> some View {
+        HStack(spacing: 0) {
+            if key == "chem" {
+                barIcon("gearshape.fill", "Chemistry options") { chemistryOptions = true }
+            }
+            switch key {
+            case "proc": barIcon("plus", "New process") { addingProcess = true }
+            case "chem": barIcon("plus", "New chemistry batch") { addingBatch = true }
+            case "mat": barIcon("plus", "New kind of material") { addingKind = true }
+            default: EmptyView()
+            }
+        }
+    }
+
+    private func barIcon(_ name: String, _ label: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Image(systemName: name).font(.system(size: name == "plus" ? 30 : 24, weight: .heavy))
+                .foregroundStyle(Theme.onRed).frame(width: 44, height: 50).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder private func partIcon(_ key: String, size: CGFloat) -> some View {
@@ -278,27 +305,6 @@ struct HomeView: View {
 
     private var madeTitle: String {
         store.made.map { $0.makes == "tissue" ? "Tissue \($0.label) saved" : "Batch \($0.label) saved" } ?? ""
-    }
-
-    /// ▶ each glop or tissue walk-through, with a pencil to edit its recipe: the recipe is
-    /// changed here; a walk only records what was done that day.
-    private func makeButtons(_ makes: String) -> some View {
-        VStack(spacing: 8) {
-            ForEach((store.snapshot?.presets ?? []).filter { $0.makes == makes }) { p in
-                HStack(spacing: 8) {
-                    Button { editOn = RecipeId(id: p.id) } label: {
-                        Image(systemName: "square.and.pencil").font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(Theme.red).frame(width: 40, height: 54)
-                    }
-                    .accessibilityLabel("Edit recipe")
-                    Button { walks.start(preset: p) } label: {
-                        Text("▶ " + (makes == "chemistry" ? "Make \(p.name)" : p.name)).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(NextButtonStyle(compact: true))
-                }
-            }
-        }
-        .padding(.leading, 8)
     }
 
     /// Lists to open and edit; each one is also chosen from in the walk-throughs.
@@ -330,8 +336,6 @@ struct HomeView: View {
     }
 }
 
-/// A walk-through to open in the editor.
-private struct RecipeId: Identifiable { let id: Int }
 
 /// A photographic enlarger: column and base, carriage, lamp head, lens, easel.
 struct EnlargerIcon: Shape {

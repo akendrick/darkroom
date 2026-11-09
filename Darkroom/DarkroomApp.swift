@@ -86,11 +86,11 @@ private struct SplashView: View {
         .accessibilityLabel("Darkroom is opening")
         .task {
             let start = Date()
-            withAnimation(.easeIn(duration: 0.5)) { lit = true }
-            try? await Task.sleep(for: .seconds(0.5))
-            withAnimation(.easeIn(duration: 2.4)) { spread = true }
-            withAnimation(.easeIn(duration: 0.8).delay(1.5)) { inked = true }
-            try? await Task.sleep(for: .seconds(2.6))
+            withAnimation(.easeIn(duration: 0.25)) { lit = true }
+            try? await Task.sleep(for: .seconds(0.25))
+            withAnimation(.easeIn(duration: 1)) { spread = true }
+            withAnimation(.easeIn(duration: 0.35).delay(0.6)) { inked = true }
+            try? await Task.sleep(for: .seconds(1.1))
             while !store.ready && Date().timeIntervalSince(start) < longest {
                 try? await Task.sleep(for: .milliseconds(100))
             }

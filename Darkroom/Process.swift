@@ -161,8 +161,9 @@ struct ProcessesList: View {
     @State private var defining: ProcessDoc?
     /// The stage to open on, when defining from a stage's pencil.
     @State private var definingStage: String?
-    @State private var adding = false
+    @Binding var adding: Bool
     @State private var newName = ""
+    @FocusState private var naming: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -199,10 +200,9 @@ struct ProcessesList: View {
                         .font(Theme.body.weight(.bold)).foregroundStyle(.black)
                         .padding(12).background(Theme.box, in: .rect(cornerRadius: 8))
                         .submitLabel(.done).onSubmit(add)
+                        .focused($naming).onAppear { naming = true }
                     Button("Add", action: add).buttonStyle(NextButtonStyle(compact: true)).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-            } else {
-                Button("+ New process") { adding = true }.buttonStyle(WalkButtonStyle()).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .sheet(item: $defining) { p in ProcessEditor(doc: p, startOn: definingStage) }
