@@ -5,7 +5,7 @@ import SwiftUI
 /// described by its fields, the same ones darkroom-api.php keeps, and read
 /// and saved straight to the server (so these need a connection).
 struct ListSpec: Identifiable, Hashable {
-    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String) }
+    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -35,6 +35,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "volume_ml", label: "Volume ml", kind: .number),
             .init(key: "mixed_at", label: "Mixed at", kind: .dateTime),
             .init(key: "use_within_min", label: "Use within (min)", kind: .whole),
+            .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["date_created"], archives: true,
            rowTitle: { chemLabel($0) }, rowSub: { [$0["date_created"].string, $0["sheets_used"].int.map { "\($0) used" }].compactMap { $0 }.joined(separator: " · ") }),
@@ -44,13 +45,16 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "size", label: "Size", kind: .text),
             .init(key: "chemistry_id", label: "Glop batch", kind: .pick("chemistry")),
             .init(key: "amount_poured", label: "Amount poured", kind: .text),
+            .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["date_poured"], archives: true,
-           rowTitle: { Material(what: .carbon_tissue, row: $0).label }, rowSub: { Material(what: .carbon_tissue, row: $0).sub }),
+           rowTitle: { Material(what: .carbon_tissue, row: $0).label },
+           rowSub: { j in [Material(what: .carbon_tissue, row: j).sub, LinkRow.summary(j["links"].array).map { "from " + $0 }].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "support_paper", title: "Support papers", fields: [
             .init(key: "mark", label: "Mark", kind: .text),
             .init(key: "paper_id", label: "Paper", kind: .pick("paper")),
             .init(key: "treatment_chemistry_id", label: "Treated with", kind: .pick("chemistry")),
+            .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["paper_id"], archives: true,
            rowTitle: { Material(what: .support_paper, row: $0).label }, rowSub: { $0["treatment_label"].string }),
@@ -66,6 +70,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "title_id", label: "Name", kind: .text),
             .init(key: "date_created", label: "Made", kind: .date),
             .init(key: "type_id", label: "Type", kind: .pick("negative_types")),
+            .init(key: "links", label: "Made from", kind: .links),
             .init(key: "settings_notes", label: "Settings", kind: .notes),
         ], required: ["date_created"], archives: true,
            rowTitle: { Material(what: .negative, row: $0).label }, rowSub: { $0["type_name"].string }),
@@ -103,10 +108,18 @@ struct ListSpec: Identifiable, Hashable {
         ListSpec(id: "material:\(k.id)", title: k.name, fields: [
             .init(key: "label", label: "Name", kind: .text),
             .init(key: "maker", label: "Maker", kind: .text),
+            .init(key: "on_hand", label: "On hand", kind: .number),
+            .init(key: "unit", label: "Unit (sheets, g, mL)", kind: .text),
+            .init(key: "acquired_on", label: "Acquired", kind: .date),
+            .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["label"], archives: true,
            rowTitle: { $0["label"].string ?? "" },
-           rowSub: { j in [j["maker"].string, j["notes"].string].compactMap { $0 }.joined(separator: " · ") },
+           rowSub: { j in
+               let stock = j["on_hand"].double.map { Amount.format($0) + (j["unit"].string.map { " " + $0 } ?? "") + " on hand" }
+               return [stock, j["maker"].string, LinkRow.summary(j["links"].array).map { "from " + $0 }, j["notes"].string]
+                   .compactMap { $0 }.joined(separator: " · ")
+           },
            fixed: ["kind_id": .from(k.id)], listRes: "material&kind_id=\(k.id)")
     }
 
@@ -417,6 +430,8 @@ struct RowForm: View {
     let saved: () async -> Void
     @State private var values: [String: JSON] = [:]
     @State private var options: [String: [JSON]] = [:]
+    /// The "Made from" rows, kept apart from values so typing in them keeps focus.
+    @State private var links: [LinkRow] = []
     @State private var busy = false
     @State private var error: String?
     @State private var confirmArchive = false
@@ -487,6 +502,11 @@ struct RowForm: View {
                     }
                 }.pickerStyle(.menu).labelsHidden()
             }
+        case .links:
+            VStack(alignment: .leading, spacing: 6) {
+                Text(f.label.uppercased()).font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+                LinksEditor(rows: $links)
+            }
         }
     }
 
@@ -496,7 +516,8 @@ struct RowForm: View {
 
     private func setUp() async {
         if values.isEmpty {
-            for f in spec.fields { values[f.key] = row?[f.key] ?? .null }
+            for f in spec.fields where f.kind != .links { values[f.key] = row?[f.key] ?? .null }
+            links = (row?["links"].array ?? []).map(LinkRow.init(link:))
             if row == nil {     // a new one is made today
                 for f in spec.fields where f.kind == .date && spec.required.contains(f.key) { values[f.key] = .string(fmt(.now, false)) }
             }
@@ -510,7 +531,12 @@ struct RowForm: View {
         if let miss = spec.required.first(where: { values[$0]?.string == nil }) {
             error = "\(spec.fields.first { $0.key == miss }?.label ?? miss) is needed"; return
         }
-        send(.object(values.merging(spec.fixed) { _, f in f }))
+        var body = values.merging(spec.fixed) { _, f in f }
+        if spec.fields.contains(where: { $0.kind == .links }) {
+            // Only when the server sent links (one without them would lose nothing either way).
+            if row == nil || (row?["links"] ?? .null) != .null { body["links"] = .array(links.compactMap(\.asLink)) }
+        }
+        send(.object(body))
     }
 
     private func send(_ body: JSON) {
