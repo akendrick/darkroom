@@ -389,6 +389,7 @@ final class WalkModel {
     // MARK: Watch
 
     func pushWatch() {
+        Voice.lastClientId = clientId
         let s = page.step
         // The Watch keeps to the essentials: no tray.
         let meta = (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" } ?? ""

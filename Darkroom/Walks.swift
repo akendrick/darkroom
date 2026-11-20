@@ -17,6 +17,7 @@ final class Walks {
 
     init(store: AppStore) {
         self.store = store
+        Voice.walks = self
         // A Watch press goes to the print it was made on.
         PhoneWatch.shared.onCommand = { [weak self] cmd, page in
             guard let self else { return }
