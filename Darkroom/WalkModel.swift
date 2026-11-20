@@ -262,6 +262,10 @@ final class WalkModel {
         alarmTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
+                if let self, let end = self.behindEnd, end <= .now {
+                    self.behindEnd = nil
+                    if !StepAlarm.shared.usable { Alarm.ring() }
+                }
                 guard let self, let key = self.key, var r = self.draft.recs[key], r.timer.isRunning,
                       !r.alarmed, let left = r.timer.remaining(), left <= 0 else { continue }
                 r.alarmed = true
@@ -291,13 +295,39 @@ final class WalkModel {
 
     private var notificationId: String { "step-timer-\(clientId)" }
 
+    /// The end of a step left running behind (see next()), rung in the app here
+    /// and by AlarmKit or a notification when the phone is locked.
+    private var behindEnd: Date?
+    private var behindKey: String { "\(clientId)-behind" }
+
+    private func ringLater(at end: Date, title: String) {
+        behindEnd = end
+        StepAlarm.shared.set(behindKey, end, title: title)
+        guard !StepAlarm.shared.usable else { return }
+        let n = UNMutableNotificationContent()
+        n.title = title
+        n.body = "The step you went on from"
+        n.sound = .default
+        n.interruptionLevel = .timeSensitive
+        let t = UNTimeIntervalNotificationTrigger(timeInterval: max(1, end.timeIntervalSinceNow), repeats: false)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "step-timer-\(behindKey)", content: n, trigger: t))
+    }
+
     // MARK: Moving between pages
 
     /// On Next a step counts as done and its time is fixed: the time the
     /// timer actually ran (the set time plus any time over), else the set time.
+    /// A countdown still running with time left is a step going on while the
+    /// next one starts (the pre-bath during the exposure): it gets its full set
+    /// time and still rings when it ends. Paused early, it keeps the time it ran.
     func next() {
         if let s = page.step, !s.isSelect {
             var r = rec
+            if r.timer.isRunning, let t = r.timer.target, let end = r.timer.endsAt, end > .now {
+                ringLater(at: end, title: [sideName, "\(s.name) — time"].compactMap { $0 }.joined(separator: " · "))
+                r.timer.reset(); r.timer.carried = Double(t)   // shows as run to the end
+                r.alarmed = true
+            }
             r.timer.pause()
             r.seconds = !s.timed ? nil : r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
             if r.startedAt == nil { r.startedAt = Clock.stamp() }
