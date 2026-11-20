@@ -226,6 +226,10 @@ struct PresetStepsView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var edit: PresetEdit
     @State private var confirmLeave = false
+    /// Reorder shows a handle on every step to drag by; a long press on a row
+    /// that also opens the step is too easily taken for a tap.
+    @State private var mode: EditMode = .inactive
+    private var reordering: Bool { mode == .active }
 
     var body: some View {
         List {
@@ -250,11 +254,17 @@ struct PresetStepsView: View {
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 }
                 .onMove { edit.steps.move(fromOffsets: $0, toOffset: $1) }
-                .onDelete { edit.steps.remove(atOffsets: $0) }
+                .onDelete(perform: reordering ? nil : { edit.steps.remove(atOffsets: $0) })
                 Button("+ Add step") { edit.steps.append(StepEdit()) }
                     .font(Theme.body.weight(.bold)).listRowBackground(Theme.bg)
             } header: {
-                Text("STEPS · hold and drag to reorder · swipe left to remove").font(Theme.label).foregroundStyle(Theme.bright)
+                HStack {
+                    Text(reordering ? "STEPS · drag by ≡ to move" : "STEPS · swipe left to remove").font(Theme.label).foregroundStyle(Theme.bright)
+                    Spacer()
+                    Button(reordering ? "Done" : "Reorder") { withAnimation { mode = reordering ? .inactive : .active } }
+                        .font(Theme.body.weight(.bold)).foregroundStyle(Theme.bright)
+                        .disabled(edit.steps.count < 2 && !reordering)
+                }
             } footer: {
                 Text("A step used by earlier prints is kept with them when removed here.").font(Theme.small)
             }
@@ -262,6 +272,7 @@ struct PresetStepsView: View {
                 Text(e).font(Theme.small).listRowBackground(Theme.bg)
             }
         }
+        .environment(\.editMode, $mode)
         .scrollContentBackground(.hidden)
         .background(Theme.bg)
         .navigationTitle(edit.name)
