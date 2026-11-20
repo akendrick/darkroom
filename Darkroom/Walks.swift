@@ -37,9 +37,12 @@ final class Walks {
 
     /// A new print, batch or tissue on this walk-through. `made` is what the
     /// walk before made, already chosen: the glop for a tissue, the tissue for a print.
-    func start(preset p: Preset, made: Made? = nil, left: Bool = false) {
+    /// `chosen`: the walk-through was picked already (a favourite), so a print
+    /// opens at its first step too; Back still reaches the start page, and the
+    /// title can be given on the last page.
+    func start(preset p: Preset, made: Made? = nil, chosen: Bool = false, left: Bool = false) {
         var d = PrintDraft(preset: p)
-        if !p.makesPrint || made != nil { d.page = 1 }   // chosen already: open at its first step
+        if !p.makesPrint || made != nil || chosen { d.page = 1 }   // chosen already: open at its first step
         if let made {
             if made.makes == "tissue" { d.layers[0][SelectWhat.carbon_tissue.layerField] = made.id }
             else if let s = p.steps.first(where: \.choosesBatch) {

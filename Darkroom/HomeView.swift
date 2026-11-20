@@ -226,7 +226,7 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("FAVOURITES").font(Theme.label).tracking(2).foregroundStyle(Theme.bright)
             ForEach(favourites) { p in
-                Button { walks.start(preset: p) } label: {
+                Button { walks.start(preset: p, chosen: true) } label: {
                     Label(p.name, systemImage: "figure.run").minimumScaleFactor(0.7).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(NextButtonStyle(compact: true))
