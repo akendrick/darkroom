@@ -312,13 +312,62 @@ struct AmountBlock: View {
     }
 }
 
-/// Pour: the area today, the amount it suggests, and the amount poured,
-/// filled in from the suggestion and free to change.
+/// Checklist: big rows to tick. Next works with none ticked; the ticked ones
+/// go with the record of what was made.
+struct ChecklistBlock: View {
+    @Bindable var model: WalkModel
+    let step: Step
+
+    private var ticked: [String] { model.rec.checked ?? [] }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(Array(step.checklist.enumerated()), id: \.offset) { _, item in
+                let on = ticked.contains(item)
+                Button { toggle(item) } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: on ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(Theme.red)
+                        Text(item).font(Theme.body.weight(.semibold)).multilineTextAlignment(.leading)
+                            .strikethrough(on, color: Theme.dim)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                    .background(on ? Theme.fill : Theme.box.opacity(Theme.darkroom ? 0.25 : 1), in: .rect(cornerRadius: 10))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item)
+                .accessibilityValue(on ? "ticked" : "not ticked")
+                .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+            }
+            if step.checklist.isEmpty {
+                Text("This checklist has no items yet: edit the walk-through to add them.").font(Theme.small).foregroundStyle(Theme.dim)
+            } else {
+                Text("\(ticked.count) of \(step.checklist.count) ticked · Next works with none ticked")
+                    .font(Theme.small).foregroundStyle(Theme.dim)
+            }
+        }
+    }
+
+    /// Ticks or unticks one, keeping the list's order.
+    private func toggle(_ item: String) {
+        var set = Set(ticked)
+        if set.contains(item) { set.remove(item) } else { set.insert(item) }
+        var r = model.rec
+        r.checked = step.checklist.filter(set.contains)
+        if r.startedAt == nil { r.startedAt = Clock.stamp() }
+        model.rec = r
+    }
+}
+
+/// Pour: the pour's length and width in cm; the page works out the area and
+/// the amount it suggests, and fills in the amount poured, free to change.
 struct PourBlock: View {
     @Bindable var model: WalkModel
     let step: Step
-    @State private var areaText = ""
-    @FocusState private var typing: Bool
 
     private var unit: String { step.unitShown.isEmpty ? "mL" : step.unitShown }
     private var suggested: Double? {
@@ -328,10 +377,19 @@ struct PourBlock: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Field(label: "Area of pour, cm² (or 20x25)") {
-                TextField("cm²", text: $areaText).keyboardType(.numbersAndPunctuation)
-                    .font(Theme.display(40)).focused($typing)
-                    .onChange(of: areaText) { _, t in setArea(t) }
+            HStack(alignment: .bottom, spacing: 8) {
+                Field(label: "Length cm") {
+                    NumberField(value: Binding(get: { model.rec.length }, set: { setSides(length: $0, width: model.rec.width) }))
+                        .font(Theme.display(40))
+                }
+                Text("×").font(Theme.display(36)).padding(.bottom, 6)
+                Field(label: "Width cm") {
+                    NumberField(value: Binding(get: { model.rec.width }, set: { setSides(length: model.rec.length, width: $0) }))
+                        .font(Theme.display(40))
+                }
+            }
+            if let a = model.rec.area {
+                Text("= \(Amount.format(a)) cm²").font(Theme.small).foregroundStyle(Theme.dim)
             }
             if let s = suggested {
                 Text("Suggested pour is \(Amount.format(s)) \(unit)").font(Theme.body.weight(.semibold))
@@ -351,14 +409,15 @@ struct PourBlock: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .onAppear { if areaText.isEmpty, let a = model.rec.area { areaText = Amount.format(a) } }
     }
 
-    /// A new area sets the amount to the suggestion; typing the amount after keeps it.
-    private func setArea(_ t: String) {
-        guard typing else { return }
+    /// New sides set the area and fill the amount with the suggestion; an
+    /// amount typed after that is kept.
+    private func setSides(length: Double?, width: Double?) {
         var r = model.rec
-        r.area = Pour.area(t)
+        guard r.length != length || r.width != width else { return }
+        r.length = length; r.width = width
+        r.area = Pour.area(length, width)
         if let a = r.area, let rate = step.defaultAmount { r.amount = Pour.amount(area: a, rate: rate) }
         model.rec = r
     }
@@ -454,6 +513,7 @@ struct StepPage: View {
             Note(text: step.notes)
             if step.isPigment { PigmentBlock(model: model, step: step).onAppear { model.keepDefaults() } }
             else if step.isPour { PourBlock(model: model, step: step).id(model.pageKey) }
+            else if step.isCheck { ChecklistBlock(model: model, step: step) }
             else if step.isAdd { AmountBlock(model: model, step: step).onAppear { model.keepDefaults() } }
             HStack(alignment: .firstTextBaseline) {
                 if let t = step.tray { Text("TRAY \(t)").font(Theme.display(30)) }
@@ -477,7 +537,7 @@ struct StepPage: View {
 
             // The time is the timer: tap it to start or pause. A step with no
             // timer is the instruction, then a big Done that acts as Next.
-            if step.timed { timer } else if !step.isAdd { doneButton }
+            if step.timed { timer } else if !step.isAdd && !step.isCheck { doneButton }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 12) {
                 if step.recordsPh {
                     Field(label: "pH") {
@@ -662,7 +722,8 @@ struct RunFinishPage: View {
             return t.isEmpty ? "—" : t.joined(separator: " + ")
         }
         var bits = [r.amount.map { "\(Amount.format($0)) \(s.unitShown)" }, r.seconds.map(Duration.format), r.temp.map { "\($0.formatted()) °C" }].compactMap { $0 }
-        if s.isPour, let a = r.area { bits.insert("\(Amount.format(a)) cm²", at: 0) }
+        if s.isCheck { return (r.checked ?? []).isEmpty ? "none ticked" : "✓ " + (r.checked ?? []).joined(separator: ", ") }
+        if s.isPour, let t = Pour.size(r) { bits.insert(t, at: 0) }
         else if s.isAdd, let a = r.amount, let d = s.defaultAmount, a != d { bits[0] += " (recipe \(Amount.format(d)))" }
         return bits.isEmpty ? "✓" : bits.joined(separator: " · ")
     }
@@ -704,6 +765,7 @@ struct FinishPage: View {
     private func summary(_ r: StepRecord?) -> String {
         guard let r, r.done else { return "—" }
         if r.skipped { return "skipped" }
+        if let c = r.checked { return c.isEmpty ? "none ticked" : "✓ " + c.joined(separator: ", ") }
         let s = [r.seconds.map(Duration.format), r.temp.map { "\($0.formatted()) °C" }].compactMap { $0 }
         return s.isEmpty ? "✓" : s.joined(separator: " · ")
     }

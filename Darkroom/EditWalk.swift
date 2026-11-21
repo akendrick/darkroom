@@ -29,6 +29,7 @@ struct StepEdit: Identifiable, Equatable {
     var pigmentId: Int?         // pigment steps (selectWhat "pigment"): the usual pigment
     var bathTypeId: Int?        // bath steps: Fog, Develop…
     var defaultHumidity: Double?
+    var checklist = ""          // check steps: one item per line
     var instructionId: Int?     // the overview step it belongs to, as the server has it
     var block: UUID?            // while editing a process: that overview step (nil: before the first)
 
@@ -45,6 +46,7 @@ struct StepEdit: Identifiable, Equatable {
         notes = j["notes"].string ?? ""; timesUsed = j["times_used"].int ?? 0
         defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
         bathTypeId = j["bath_type_id"].int; defaultHumidity = j["default_humidity"].double; instructionId = j["instruction_id"].int
+        checklist = j["checklist"].string ?? ""
         if kind == "do", timed, materialKindId != nil || selectWhat != nil { kind = "select" }
     }
 
@@ -71,6 +73,7 @@ struct StepEdit: Identifiable, Equatable {
             "default_seconds": .from(defaultSeconds), "min_seconds": .from(minSeconds), "max_seconds": .from(maxSeconds),
             "default_temp": .from(defaultTemp), "optional": .from(optional ? 1 : 0), "records_ph": .from(recordsPh ? 1 : 0),
             "lights_ok_after": .from(lightsOkAfter ? 1 : 0), "notes": .from(notes.isEmpty ? nil : notes),
+            "checklist": .from(kind == "check" ? Checklist.text(Checklist.lines(checklist)) : nil),
             "same_as_index": .from(sameAsIndex),
         ])
     }
@@ -96,6 +99,11 @@ extension Snapshot {
             if let k = s.materialKindId { return "Choose " + (kindName(k)?.lowercased() ?? "material") }
             if s.selectWhat == "chemistry" { return "Choose " + (chemistryTypeName(s.chemistryTypeId)?.lowercased() ?? "a batch") }
             return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
+        }
+        if s.kind == "check" {
+            let n = Checklist.lines(s.checklist).count
+            return ["Checklist", "\(n) item\(n == 1 ? "" : "s")", s.timed ? s.defaultSeconds.map(Duration.format) : nil, s.optional ? "optional" : nil]
+                .compactMap { $0 }.joined(separator: " · ")
         }
         if s.isPour {
             let rate = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? "mL") per cm²" } ?? "amount from the area"
@@ -326,17 +334,18 @@ struct StepEditView: View {
 
 /// The Step Selection: the eight types and the kind stored for each.
 private enum StepType: String, CaseIterable, Identifiable {
-    case exposure, timer, todo, important, add, pour, select, bath, dry
+    case exposure, timer, todo, checklist, important, add, pour, select, bath, dry
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .exposure: "EXPOSURE"; case .timer: "TIMER"; case .todo: "TO-DO"; case .important: "IMPORTANT"
+        case .exposure: "EXPOSURE"; case .timer: "TIMER"; case .todo: "TO-DO"; case .checklist: "CHECKLIST"; case .important: "IMPORTANT"
         case .add: "ADD + MEASURE"; case .pour: "POUR"; case .select: "SELECT MATERIAL"; case .bath: "BATH"; case .dry: "DRY"
         }
     }
     var kind: String {
         switch self {
         case .todo: "do"
+        case .checklist: "check"
         case .pour: "add"
         default: rawValue
         }
@@ -350,6 +359,7 @@ private enum StepType: String, CaseIterable, Identifiable {
         case "bath", "rinse", "chemical_fog": self = .bath
         case "dry": self = .dry
         case "important": self = .important
+        case "check": self = .checklist
         default: self = .todo
         }
     }
@@ -407,6 +417,12 @@ struct StepForm: View {
                 case .add: addFields
                 case .pour: pourFields
                 case .select: chooser(label: "Choose")
+                case .checklist:
+                    Field(label: "Things to tick · one per line") {
+                        TextField("Level the pouring surface\nRoom above 14 °C", text: $step.checklist, axis: .vertical).lineLimit(4...14)
+                    }
+                    Text("Next works with none ticked. The ticked ones are kept with what was made.")
+                        .font(Theme.small).foregroundStyle(Theme.dim)
                 case .timer, .todo, .important: EmptyView()
                 }
                 VStack(spacing: 0) {
@@ -436,7 +452,7 @@ struct StepForm: View {
         } else if step.isPour { step.selectWhat = nil }
         step.kind = t.kind
         if t == .timer { step.timed = true }
-        if t == .todo || t == .important || t == .select { step.timed = false }
+        if t == .todo || t == .checklist || t == .important || t == .select { step.timed = false }
         if t == .bath, step.bathTypeId == nil { step.bathTypeId = store.snapshot?.bathTypes.first?.id }
     }
 

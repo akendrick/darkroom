@@ -132,6 +132,8 @@ struct Step: Identifiable, Equatable, Hashable {
     let defaultAmount: Double?, unit: String?, pigmentId: Int?
     /// Dry steps: the usual room humidity, %.
     let defaultHumidity: Double?
+    /// Checklist steps: the things to tick, in order.
+    let checklist: [String]
 
     init(_ j: JSON) {
         id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
@@ -146,19 +148,22 @@ struct Step: Identifiable, Equatable, Hashable {
         selectRaw = j["select_what"].string
         defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
         defaultHumidity = j["default_humidity"].double
+        checklist = Checklist.lines(j["checklist"].string)
     }
 
     var isImportant: Bool { kind == "important" }
     var isDry: Bool { kind == "dry" }
     var isSelect: Bool { kind == "select" }
     var isExposure: Bool { kind == "exposure" }
+    /// A list of things to tick; Next works with none ticked.
+    var isCheck: Bool { kind == "check" }
     /// A page with a timer: not a choice, and not a "do this, then Next" step.
     var hasTimer: Bool { !isSelect && timed }
     /// An amount to measure, changeable on the day.
     var isAdd: Bool { kind == "add" }
     /// An add step listing pigments and grams.
     var isPigment: Bool { isAdd && selectRaw == "pigment" }
-    /// A pour: the area today, then the amount, suggested from the area
+    /// A pour: its length and width today, then the amount, suggested from the area
     /// at defaultAmount (unit) per cm².
     var isPour: Bool { isAdd && selectRaw == "pour" }
     /// Chooses a chemistry batch: the glop for a tissue.
@@ -266,20 +271,29 @@ enum Clock {
     }
 }
 
-/// Pour steps: the area typed on the day, and the amount it suggests.
+/// Pour steps: the length and width typed on the day, and what they suggest.
 enum Pour {
-    /// "500", "500 cm2", "20x25", "20 × 25", "20 by 25" → cm². Commas count as decimal points.
-    static func area(_ text: String) -> Double? {
-        let t = text.lowercased().replacingOccurrences(of: ",", with: ".")
-            .replacingOccurrences(of: "cm²", with: "").replacingOccurrences(of: "cm2", with: "").replacingOccurrences(of: "cm", with: "")
-        let parts = t.replacingOccurrences(of: "×", with: "x").replacingOccurrences(of: "*", with: "x")
-            .replacingOccurrences(of: "by", with: "x").split(separator: "x")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        guard (1...2).contains(parts.count) else { return nil }
-        let n = parts.compactMap(Double.init)
-        guard n.count == parts.count, n.allSatisfy({ $0 > 0 }) else { return nil }
-        return n.reduce(1, *)
+    /// Length × width, once both are there and above 0.
+    static func area(_ length: Double?, _ width: Double?) -> Double? {
+        guard let l = length, let w = width, l > 0, w > 0 else { return nil }
+        return l * w
     }
     /// The area times the rate, to a tenth.
     static func amount(area: Double, rate: Double) -> Double { (area * rate * 10).rounded() / 10 }
+    /// "20 × 25 cm", else "500 cm²".
+    static func size(_ r: StepRecord) -> String? {
+        if let l = r.length, let w = r.width { return "\(Amount.format(l)) × \(Amount.format(w)) cm" }
+        return r.area.map { "\(Amount.format($0)) cm²" }
+    }
+}
+
+/// Checklist steps: items are kept one per line, on the step and on the record.
+enum Checklist {
+    static func lines(_ text: String?) -> [String] {
+        (text ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+    static func text(_ items: [String]?) -> String? {
+        guard let items, !items.isEmpty else { return nil }
+        return items.joined(separator: "\n")
+    }
 }

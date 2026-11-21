@@ -23,7 +23,10 @@ struct StepRecord: Codable, Equatable {
     var done = false            // set by Next or Skip only
     var alarmed = false
     var amount: Double?         // add steps: as measured today
-    var area: Double?           // pour steps: the area poured, cm²
+    var area: Double?           // pour steps: the area poured, cm² (length × width)
+    var length: Double?         // pour steps: the pour's sides, cm
+    var width: Double?
+    var checked: [String]?      // checklist steps: the items ticked, in list order
     var pigments: [PigLine]?    // pigment steps
 }
 
@@ -166,7 +169,7 @@ extension PrintDraft {
     /// The area on a tissue's Pour step: "500 cm²".
     func pourArea(_ snap: Snapshot?) -> String? {
         for s in snap?.preset(presetId)?.steps ?? [] where s.isPour {
-            if let r = recs[Self.key(s, layer: 0)], r.done, !r.skipped, let a = r.area { return Amount.format(a) + " cm²" }
+            if let r = recs[Self.key(s, layer: 0)], r.done, !r.skipped, let t = Pour.size(r) { return t }
         }
         return nil
     }
@@ -193,6 +196,8 @@ extension PrintDraft {
                 "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "amount": r.skipped ? .null : .from(amount), "unit": .from(s.isAdd ? s.unitShown : nil),
                 "area_cm2": r.skipped || !s.isPour ? .null : .from(r.area),
+                "length_cm": r.skipped || !s.isPour ? .null : .from(r.length), "width_cm": r.skipped || !s.isPour ? .null : .from(r.width),
+                "checked": r.skipped || !s.isCheck ? .null : .from(Checklist.text(r.checked)),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
                 "temp": .from(r.temp), "humidity": .from(r.humidity), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
@@ -225,6 +230,8 @@ extension PrintDraft {
                 "temp": .from(r.temp), "humidity": .from(r.humidity), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
                 "amount": r.skipped || !s.isAdd || s.isPigment ? .null : .from(r.amount), "unit": .from(s.isAdd && !s.isPigment ? s.unitShown : nil),
                 "area_cm2": r.skipped || !s.isPour ? .null : .from(r.area),
+                "length_cm": r.skipped || !s.isPour ? .null : .from(r.length), "width_cm": r.skipped || !s.isPour ? .null : .from(r.width),
+                "checked": r.skipped || !s.isCheck ? .null : .from(Checklist.text(r.checked)),
             ]))
         }
         // This layer: its materials and walk-through. The server changes only
@@ -269,7 +276,8 @@ extension PrintDraft {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.ph = s["ph"].double
-            r.amount = s["amount"].double; r.area = s["area_cm2"].double
+            r.amount = s["amount"].double; r.area = s["area_cm2"].double; r.length = s["length_cm"].double; r.width = s["width_cm"].double
+            if let c = s["checked"].string { r.checked = Checklist.lines(c) }
             r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string; r.startedAt = s["started_at"].string
             r.skipped = s["skipped"].flag; r.done = true
             recs["\(sid):\(n)"] = r
@@ -309,7 +317,8 @@ extension PrintDraft {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.amount = s["amount"].double
-            r.area = s["area_cm2"].double
+            r.area = s["area_cm2"].double; r.length = s["length_cm"].double; r.width = s["width_cm"].double
+            if let c = s["checked"].string { r.checked = Checklist.lines(c) }
             r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string
             r.startedAt = s["started_at"].string; r.skipped = s["skipped"].flag; r.done = true
             recs["\(sid):0"] = r
