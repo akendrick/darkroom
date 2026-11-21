@@ -23,6 +23,7 @@ struct StepRecord: Codable, Equatable {
     var done = false            // set by Next or Skip only
     var alarmed = false
     var amount: Double?         // add steps: as measured today
+    var area: Double?           // pour steps: the area poured, cm²
     var pigments: [PigLine]?    // pigment steps
 }
 
@@ -153,10 +154,19 @@ extension PrintDraft {
         return id
     }
 
-    /// The amount on a tissue's pour step: "45 mL".
+    /// The amount on a tissue's pour step: "45 mL". A Pour step first, else any amount.
     func poured(_ snap: Snapshot?) -> String? {
-        for s in snap?.preset(presetId)?.steps ?? [] where s.isAdd && !s.isPigment {
+        let adds = (snap?.preset(presetId)?.steps ?? []).filter { $0.isAdd && !$0.isPigment }
+        for s in adds.filter(\.isPour) + adds.filter({ !$0.isPour }) {
             if let r = recs[Self.key(s, layer: 0)], r.done, !r.skipped, let a = r.amount { return Amount.format(a) + (s.unit.map { " " + $0 } ?? "") }
+        }
+        return nil
+    }
+
+    /// The area on a tissue's Pour step: "500 cm²".
+    func pourArea(_ snap: Snapshot?) -> String? {
+        for s in snap?.preset(presetId)?.steps ?? [] where s.isPour {
+            if let r = recs[Self.key(s, layer: 0)], r.done, !r.skipped, let a = r.area { return Amount.format(a) + " cm²" }
         }
         return nil
     }
@@ -182,6 +192,7 @@ extension PrintDraft {
                 "process_step_id": .from(s.id), "name": .string(s.name), "kind": .string(s.kind),
                 "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "amount": r.skipped ? .null : .from(amount), "unit": .from(s.isAdd ? s.unitShown : nil),
+                "area_cm2": r.skipped || !s.isPour ? .null : .from(r.area),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
                 "temp": .from(r.temp), "humidity": .from(r.humidity), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
             ]))
@@ -190,7 +201,7 @@ extension PrintDraft {
         return .object([
             "preset_id": .from(presetId), "status": .string(finished ? "done" : "in_progress"),
             "label": .string(name), "made_on": .string(date), "volume_ml": .from(volume),
-            "size": .from(size.flatMap { $0.isEmpty ? nil : $0 }),
+            "size": .from((size ?? "").isEmpty ? pourArea(snap) : size),
             "amount_poured": .from((amountPoured ?? "").isEmpty ? poured(snap) : amountPoured),
             "notes": .from(notes.isEmpty ? nil : notes), "steps": .array(steps), "pigments": .array(pigments),
         ])
@@ -212,6 +223,8 @@ extension PrintDraft {
                 "kind": .string(s.kind), "tray": .from(s.tray), "chemistry_id": .from(r.chemistryId), "material_id": .from(material),
                 "started_at": .from(r.startedAt), "seconds": r.skipped ? .null : .from(r.seconds),
                 "temp": .from(r.temp), "humidity": .from(r.humidity), "ph": .from(r.ph), "skipped": .from(r.skipped ? 1 : 0), "notes": .from(r.notes),
+                "amount": r.skipped || !s.isAdd || s.isPigment ? .null : .from(r.amount), "unit": .from(s.isAdd && !s.isPigment ? s.unitShown : nil),
+                "area_cm2": r.skipped || !s.isPour ? .null : .from(r.area),
             ]))
         }
         // This layer: its materials and walk-through. The server changes only
@@ -256,6 +269,7 @@ extension PrintDraft {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.ph = s["ph"].double
+            r.amount = s["amount"].double; r.area = s["area_cm2"].double
             r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string; r.startedAt = s["started_at"].string
             r.skipped = s["skipped"].flag; r.done = true
             recs["\(sid):\(n)"] = r
@@ -295,6 +309,7 @@ extension PrintDraft {
             guard let sid = s["process_step_id"].int else { continue }
             var r = StepRecord()
             r.seconds = s["seconds"].int; r.manual = r.seconds; r.temp = s["temp"].double; r.amount = s["amount"].double
+            r.area = s["area_cm2"].double
             r.chemistryId = s["chemistry_id"].int; r.materialId = s["material_id"].int; r.notes = s["notes"].string
             r.startedAt = s["started_at"].string; r.skipped = s["skipped"].flag; r.done = true
             recs["\(sid):0"] = r

@@ -55,6 +55,7 @@ struct StepEdit: Identifiable, Equatable {
     var isSelect: Bool { kind == "select" }
     var isAdd: Bool { kind == "add" }
     var isPigment: Bool { isAdd && selectWhat == "pigment" }
+    var isPour: Bool { isAdd && selectWhat == "pour" }
 
     func payload(sameAsIndex: Int?) -> JSON {
         .object([
@@ -95,6 +96,10 @@ extension Snapshot {
             if let k = s.materialKindId { return "Choose " + (kindName(k)?.lowercased() ?? "material") }
             if s.selectWhat == "chemistry" { return "Choose " + (chemistryTypeName(s.chemistryTypeId)?.lowercased() ?? "a batch") }
             return "Choose " + (s.selectWhat.map { SelectWhat(rawValue: $0)?.noun ?? $0.replacingOccurrences(of: "_", with: " ") } ?? "…")
+        }
+        if s.isPour {
+            let rate = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? "mL") per cm²" } ?? "amount from the area"
+            return ["Pour", rate, s.optional ? "optional" : nil].compactMap { $0 }.joined(separator: " · ")
         }
         if s.isAdd {
             let amt = s.defaultAmount.map { "\(Amount.format($0)) \(s.unit ?? (s.isPigment ? "g" : ""))" }
@@ -321,17 +326,18 @@ struct StepEditView: View {
 
 /// The Step Selection: the eight types and the kind stored for each.
 private enum StepType: String, CaseIterable, Identifiable {
-    case exposure, timer, todo, important, add, select, bath, dry
+    case exposure, timer, todo, important, add, pour, select, bath, dry
     var id: String { rawValue }
     var label: String {
         switch self {
         case .exposure: "EXPOSURE"; case .timer: "TIMER"; case .todo: "TO-DO"; case .important: "IMPORTANT"
-        case .add: "ADD + MEASURE"; case .select: "SELECT MATERIAL"; case .bath: "BATH"; case .dry: "DRY"
+        case .add: "ADD + MEASURE"; case .pour: "POUR"; case .select: "SELECT MATERIAL"; case .bath: "BATH"; case .dry: "DRY"
         }
     }
     var kind: String {
         switch self {
         case .todo: "do"
+        case .pour: "add"
         default: rawValue
         }
     }
@@ -356,7 +362,7 @@ struct StepForm: View {
     let number: Int
     let earlier: [StepEdit]
 
-    private var type: StepType { StepType(kind: step.kind) }
+    private var type: StepType { step.isPour ? .pour : StepType(kind: step.kind) }
     /// A batch list can't share a page with a timer.
     private var noTimer: Bool { step.isSelect && step.selectWhat == "chemistry" }
 
@@ -399,6 +405,7 @@ struct StepForm: View {
                 case .dry:
                     Field(label: "Room humidity %") { NumberField(value: $step.defaultHumidity) }
                 case .add: addFields
+                case .pour: pourFields
                 case .select: chooser(label: "Choose")
                 case .timer, .todo, .important: EmptyView()
                 }
@@ -423,6 +430,10 @@ struct StepForm: View {
     }
 
     private func pick(_ t: StepType) {
+        if t == .pour {
+            step.selectWhat = "pour"; step.materialKindId = nil; step.pigmentId = nil; step.timed = false
+            if (step.unit ?? "").isEmpty { step.unit = "mL" }
+        } else if step.isPour { step.selectWhat = nil }
         step.kind = t.kind
         if t == .timer { step.timed = true }
         if t == .todo || t == .important || t == .select { step.timed = false }
@@ -461,6 +472,21 @@ struct StepForm: View {
             }.pickerStyle(.menu).labelsHidden()
         }
         if !step.isPigment { chooser(label: "Choose") }
+    }
+
+    /// Pour: how much per cm². On the day the walk asks the area and
+    /// suggests the amount, which can still be changed.
+    @ViewBuilder private var pourFields: some View {
+        let unit = (step.unit ?? "").isEmpty ? "mL" : step.unit!
+        HStack(spacing: 10) {
+            Field(label: "\(unit) per cm²") { NumberField(value: $step.defaultAmount) }
+            Field(label: "Unit") { TextField("mL", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
+        }
+        Text(step.defaultAmount.map { r in
+            "1 cm² gets \(Amount.format(r)) \(unit); a 20 × 25 cm pour (500 cm²) gets \(Amount.format(Pour.amount(area: 500, rate: r))) \(unit)."
+        } ?? "Set how much per cm². The walk-through asks the area and suggests the amount.")
+        .font(Theme.small).foregroundStyle(Theme.dim)
+        chemistry
     }
 
     /// A chemistry type: the walk then lists those batches, with + New.
@@ -585,5 +611,9 @@ struct NumberField: View {
             .keyboardType(whole ? .numberPad : .decimalPad)
             .onAppear { text = value.map { whole ? String(Int($0)) : $0.formatted() } ?? "" }
             .onChange(of: text) { _, t in value = Double(t.replacingOccurrences(of: ",", with: ".")) }
+            // Set from elsewhere (a pour's suggestion): show it.
+            .onChange(of: value) { _, v in
+                if Double(text.replacingOccurrences(of: ",", with: ".")) != v { text = v.map { whole ? String(Int($0)) : $0.formatted() } ?? "" }
+            }
     }
 }

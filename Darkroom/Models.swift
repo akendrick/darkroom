@@ -158,6 +158,9 @@ struct Step: Identifiable, Equatable, Hashable {
     var isAdd: Bool { kind == "add" }
     /// An add step listing pigments and grams.
     var isPigment: Bool { isAdd && selectRaw == "pigment" }
+    /// A pour: the area today, then the amount, suggested from the area
+    /// at defaultAmount (unit) per cm².
+    var isPour: Bool { isAdd && selectRaw == "pour" }
     /// Chooses a chemistry batch: the glop for a tissue.
     var choosesBatch: Bool { isSelect && selectRaw == "chemistry" }
     var unitShown: String { unit ?? (isPigment ? "g" : "") }
@@ -261,4 +264,22 @@ enum Clock {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.string(from: d)
     }
+}
+
+/// Pour steps: the area typed on the day, and the amount it suggests.
+enum Pour {
+    /// "500", "500 cm2", "20x25", "20 × 25", "20 by 25" → cm². Commas count as decimal points.
+    static func area(_ text: String) -> Double? {
+        let t = text.lowercased().replacingOccurrences(of: ",", with: ".")
+            .replacingOccurrences(of: "cm²", with: "").replacingOccurrences(of: "cm2", with: "").replacingOccurrences(of: "cm", with: "")
+        let parts = t.replacingOccurrences(of: "×", with: "x").replacingOccurrences(of: "*", with: "x")
+            .replacingOccurrences(of: "by", with: "x").split(separator: "x")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard (1...2).contains(parts.count) else { return nil }
+        let n = parts.compactMap(Double.init)
+        guard n.count == parts.count, n.allSatisfy({ $0 > 0 }) else { return nil }
+        return n.reduce(1, *)
+    }
+    /// The area times the rate, to a tenth.
+    static func amount(area: Double, rate: Double) -> Double { (area * rate * 10).rounded() / 10 }
 }

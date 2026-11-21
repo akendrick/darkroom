@@ -312,6 +312,58 @@ struct AmountBlock: View {
     }
 }
 
+/// Pour: the area today, the amount it suggests, and the amount poured,
+/// filled in from the suggestion and free to change.
+struct PourBlock: View {
+    @Bindable var model: WalkModel
+    let step: Step
+    @State private var areaText = ""
+    @FocusState private var typing: Bool
+
+    private var unit: String { step.unitShown.isEmpty ? "mL" : step.unitShown }
+    private var suggested: Double? {
+        guard let a = model.rec.area, let r = step.defaultAmount else { return nil }
+        return Pour.amount(area: a, rate: r)
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Field(label: "Area of pour, cm² (or 20x25)") {
+                TextField("cm²", text: $areaText).keyboardType(.numbersAndPunctuation)
+                    .font(Theme.display(40)).focused($typing)
+                    .onChange(of: areaText) { _, t in setArea(t) }
+            }
+            if let s = suggested {
+                Text("Suggested pour is \(Amount.format(s)) \(unit)").font(Theme.body.weight(.semibold))
+            } else if step.defaultAmount == nil {
+                Text("No amount per cm² is set for this step: edit the walk-through to add one.").font(Theme.small).foregroundStyle(Theme.dim)
+            }
+            Text("AMOUNT POURED").font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                NumberField(value: Binding(get: { model.rec.amount }, set: { model.rec.amount = $0 }))
+                    .font(Theme.display(64)).multilineTextAlignment(.center)
+                    .padding(.horizontal, 12).padding(.vertical, 4)
+                    .background(Theme.box, in: .rect(cornerRadius: 12)).foregroundStyle(.black)
+                Text(unit).font(Theme.display(40))
+            }
+            if let r = step.defaultAmount {
+                Text("\(Amount.format(r)) \(unit) per cm²").font(Theme.small).foregroundStyle(Theme.dim)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .onAppear { if areaText.isEmpty, let a = model.rec.area { areaText = Amount.format(a) } }
+    }
+
+    /// A new area sets the amount to the suggestion; typing the amount after keeps it.
+    private func setArea(_ t: String) {
+        guard typing else { return }
+        var r = model.rec
+        r.area = Pour.area(t)
+        if let a = r.area, let rate = step.defaultAmount { r.amount = Pour.amount(area: a, rate: rate) }
+        model.rec = r
+    }
+}
+
 /// A pigment step: pigments and grams for today. Add another, or a new
 /// pigment; the recipe stays as it is.
 struct PigmentBlock: View {
@@ -401,6 +453,7 @@ struct StepPage: View {
             Title(text: step.name)
             Note(text: step.notes)
             if step.isPigment { PigmentBlock(model: model, step: step).onAppear { model.keepDefaults() } }
+            else if step.isPour { PourBlock(model: model, step: step).id(model.pageKey) }
             else if step.isAdd { AmountBlock(model: model, step: step).onAppear { model.keepDefaults() } }
             HStack(alignment: .firstTextBaseline) {
                 if let t = step.tray { Text("TRAY \(t)").font(Theme.display(30)) }
@@ -585,7 +638,7 @@ struct RunFinishPage: View {
             HStack(spacing: 10) {
                 Field(label: chem ? "Made" : "Poured") { TextField("YYYY-MM-DD", text: $model.draft.date).keyboardType(.numbersAndPunctuation) }
                 if chem { Field(label: "Volume mL") { NumberField(value: $model.draft.volume) } }
-                else { Field(label: "Size") { TextField("16x26", text: Binding(get: { model.draft.size ?? "" }, set: { model.draft.size = $0 })) } }
+                else { Field(label: "Size") { TextField("16x26", text: Binding(get: { model.draft.size ?? model.draft.pourArea(model.snap) ?? "" }, set: { model.draft.size = $0 })) } }
             }
             if !chem {
                 Field(label: "Amount poured") {
@@ -609,7 +662,8 @@ struct RunFinishPage: View {
             return t.isEmpty ? "—" : t.joined(separator: " + ")
         }
         var bits = [r.amount.map { "\(Amount.format($0)) \(s.unitShown)" }, r.seconds.map(Duration.format), r.temp.map { "\($0.formatted()) °C" }].compactMap { $0 }
-        if s.isAdd, let a = r.amount, let d = s.defaultAmount, a != d { bits[0] += " (recipe \(Amount.format(d)))" }
+        if s.isPour, let a = r.area { bits.insert("\(Amount.format(a)) cm²", at: 0) }
+        else if s.isAdd, let a = r.amount, let d = s.defaultAmount, a != d { bits[0] += " (recipe \(Amount.format(d)))" }
         return bits.isEmpty ? "✓" : bits.joined(separator: " · ")
     }
 }

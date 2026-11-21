@@ -81,8 +81,9 @@ final class WalkModel {
         if let s = page.step {
             r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s)
             // Add steps start from the recipe; changing them changes only today's.
+            // A pour's amount comes from the area, typed on the page.
             if s.isPigment { r.pigments = [PigLine(pigmentId: s.pigmentId, grams: s.defaultAmount)] }
-            else if s.isAdd { r.amount = s.defaultAmount }
+            else if s.isAdd && !s.isPour { r.amount = s.defaultAmount }
             else if s.isDry { r.humidity = s.defaultHumidity }
         }
         return r
