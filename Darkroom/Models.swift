@@ -8,7 +8,10 @@ struct Snapshot: Codable, Equatable {
 
     var photoTypes: [PhotoType] { raw["photo_types"].array.map(PhotoType.init) }
     var stepKinds: [JSON] { raw["step_kinds"].array }
-    var presets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    /// Every walk the server sent, earlier revisions included (a print in progress may use one).
+    var allPresets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    /// The walks to offer: not a draft or an earlier revision of a stage's walk.
+    var presets: [Preset] { allPresets.filter { $0.revisionState != "old" && $0.revisionState != "draft" } }
     /// Processes in the order set on the website.
     var processRows: [JSON] { raw["processes"].array }
     var walkStages: [JSON] { raw["walk_stages"].array }
@@ -45,7 +48,7 @@ struct Snapshot: Codable, Equatable {
     func items(_ what: SelectWhat) -> [Material] {
         raw[what.syncKey].array.map { Material(what: what, row: $0) }.filter { !$0.archived }
     }
-    func preset(_ id: Int?) -> Preset? { presets.first { $0.id == id } }
+    func preset(_ id: Int?) -> Preset? { allPresets.first { $0.id == id } }
     func typeName(_ id: Int?) -> String { photoTypes.first { $0.id == id }?.name ?? "Print" }
 }
 
@@ -69,7 +72,10 @@ struct Preset: Identifiable, Equatable {
     let nextPresetId: Int?
     /// Starred: a shortcut on the start page.
     let favourite: Bool
+    /// "current", "draft", "old" (an earlier revision of its stage) or nil (not under a stage).
+    let revisionState: String?
     init(_ j: JSON) {
+        revisionState = j["revision_state"].string
         stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0; favourite = j["favourite"].flag
         nextPresetId = j["next_preset_id"].int
         id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
