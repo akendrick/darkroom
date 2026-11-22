@@ -16,8 +16,10 @@ struct Snapshot: Codable, Equatable {
     var bathTypes: [(id: Int, name: String)] {
         raw["bath_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
     }
-    /// The walk a stage goes on to when its own is finished, if one is set.
+    /// The walk offered when this one is finished: the walk's own next one,
+    /// else (an older server) the one its stage goes on to.
     func nextPreset(after id: Int?) -> Preset? {
+        if let n = preset(id)?.nextPresetId { return preset(n) }
         guard let stage = walkStages.first(where: { $0["preset_id"].int == id }), let n = stage["next_section_id"].int else { return nil }
         return preset(walkStages.first { $0["id"].int == n }?["preset_id"].int)
     }
@@ -63,10 +65,13 @@ struct PhotoType: Identifiable, Equatable {
 struct Preset: Identifiable, Equatable {
     let id: Int, photoTypeId: Int, name: String, isDefault: Bool, archived: Bool, steps: [Step]
     let makes: String, chemistryTypeId: Int?, stageId: Int?, sortOrder: Int
+    /// The walk offered when this one ends (glop → pour a tissue from it).
+    let nextPresetId: Int?
     /// Starred: a shortcut on the start page.
     let favourite: Bool
     init(_ j: JSON) {
         stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0; favourite = j["favourite"].flag
+        nextPresetId = j["next_preset_id"].int
         id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
         makes = j["makes"].string ?? "print"; chemistryTypeId = j["chemistry_type_id"].int
         isDefault = j["is_default"].flag; archived = j["archived"].flag

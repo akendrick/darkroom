@@ -36,6 +36,9 @@ struct ProcSection: Identifiable, Equatable, Hashable {
     var intro: String
     var presetId: Int?
     var presetName: String?
+    /// Every walk of the stage, in order (a stage may hold several); the
+    /// first is presetId. Read only here: the editor still sets one walk.
+    var walkIds: [Int] = []
     var nextKey: String?        // the stage to go on to; same as its key
     var steps: [ProcStep]
     var boxes: [ProcBox]
@@ -47,6 +50,7 @@ struct ProcSection: Identifiable, Equatable, Hashable {
     init(_ j: JSON) {
         serverId = j["id"].int; key = "s\(j["id"].int ?? 0)"; title = j["title"].string ?? ""; intro = j["intro"].string ?? ""
         presetId = j["preset_id"].int; presetName = j["preset_name"].string
+        walkIds = j["walks"].array.compactMap { $0["id"].int }
         steps = j["steps"].array.map(ProcStep.init); boxes = j["boxes"].array.map(ProcBox.init)
         nextKey = j["next_section_id"].int.map { "s\($0)" }
     }
@@ -530,10 +534,12 @@ private struct SectionPage: View {
                 Text(process.name.uppercased()).font(Theme.label).tracking(2).foregroundStyle(Theme.dim)
                 Text("\(number). \(section.title)").font(Theme.display(34)).foregroundStyle(Theme.red)
                 if !section.intro.isEmpty { Text(section.intro).font(Theme.body).foregroundStyle(Theme.red) }
-                if let pid = section.presetId, let preset = store.snapshot?.preset(pid) {
-                    Button("▶ Begin walk-through") { walks.start(preset: preset) }
+                let stageWalks = (section.walkIds.isEmpty ? [section.presetId].compactMap { $0 } : section.walkIds)
+                    .compactMap { store.snapshot?.preset($0) }
+                ForEach(stageWalks) { preset in
+                    Button(stageWalks.count > 1 ? "▶ \(preset.name)" : "▶ Begin walk-through") { walks.start(preset: preset) }
                         .buttonStyle(NextButtonStyle())
-                    Text(preset.name).font(Theme.small).foregroundStyle(Theme.dim)
+                    if stageWalks.count == 1 { Text(preset.name).font(Theme.small).foregroundStyle(Theme.dim) }
                 }
                 ForEach(section.boxes) { b in BoxView(box: b) }
                 if let before = walk?[-1] {
