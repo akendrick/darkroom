@@ -226,6 +226,9 @@ struct PrintEditor: View {
     }
 
     /// What the server keeps for a step (darkroom-api.php photo_children).
+    /// Everything the server keeps for a step, so the ones this screen doesn't
+    /// show (amounts, pour sides, ticked items, humidity, materials) go back unchanged.
     private static let stepKeys: Set<String> = ["process_step_id", "layer_no", "name", "kind", "tray", "chemistry_id",
-        "started_at", "seconds", "temp", "ph", "skipped", "light_source", "light_watts", "light_distance_cm", "notes"]
+        "material_id", "started_at", "seconds", "temp", "humidity", "ph", "skipped", "amount", "unit", "area_cm2",
+        "length_cm", "width_cm", "checked", "light_source", "light_watts", "light_distance_cm", "notes"]
 }
