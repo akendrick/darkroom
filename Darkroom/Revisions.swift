@@ -56,6 +56,7 @@ extension AppStore {
     /// the published revision the first time. Nothing is walked differently
     /// until the draft is published.
     func saveProcess(_ e: ProcessEdit) async throws {
+        for s in e.doc.sections { if let p = e.walkNameProblem(s.key) { throw ServerError(message: "\(s.title): \(p)", status: 400) } }
         if e.shellChanged {
             let full = e.payload()
             var top = full.object
@@ -128,13 +129,14 @@ extension ProcessEdit {
 
     /// A stage's directions changed: what goes into its draft.
     func directionsChanged(_ s: ProcSection, from o: ProcSection) -> Bool {
-        s.intro != o.intro || s.steps != o.steps || s.boxes != o.boxes || walks[s.key] != originalWalks[s.key] || newWalks[s.key] != nil
+        s.intro != o.intro || s.steps != o.steps || s.boxes != o.boxes || walkList(s.key) != (originalWalkSets[s.key] ?? [])
     }
 
     /// The PATCH for a stage's draft. Edited from the published revision, each
     /// row is sent as its copy in the draft (copied_from_id), so the change
-    /// notes carry on from it. Every walk of the draft is sent, so none is
-    /// taken out; only the one edited here sends its steps.
+    /// notes carry on from it. Every walk is sent in the editor's order with
+    /// its steps; one taken out in the editor is left out, which drops it from
+    /// the draft. A new walk is sent with what it makes.
     func draftPayload(_ s: ProcSection, draft d: JSON) -> JSON {
         func copies(_ rows: [JSON]) -> [Int: Int] {
             Dictionary(rows.compactMap { r in r["copied_from_id"].int.flatMap { c in r["id"].int.map { (c, $0) } } }, uniquingKeysWith: { a, _ in a })
@@ -152,16 +154,23 @@ extension ProcessEdit {
                 return .object(p)
             })
         }
-        let mine = id(walk, s.presetId)
-        var ws: [JSON] = dw.map { w in
-            var o: [String: JSON] = ["id": w["id"], "name": w["name"]]
-            if let mine, w["id"].int == mine, let list = walks[s.key] { o["steps"] = walkSteps(list) }
+        var ws: [JSON] = walkList(s.key).compactMap { w in
+            var o: [String: JSON]
+            if let sid = w.serverId {
+                guard let mine = id(walk, sid) else { return nil }
+                o = ["id": .from(mine)]
+            } else {
+                o = w.makes?.object ?? [:]
+            }
+            o["name"] = .string(w.name.trimmingCharacters(in: .whitespaces))
+            if w.readable { o["steps"] = walkSteps(w.steps) }
             return .object(o)
         }
-        if mine == nil, let n = newWalks[s.key], let list = walks[s.key] {
-            var o = n.object; o["name"] = .string(s.title); o["steps"] = walkSteps(list)
-            ws.append(.object(o))
-        }
+        // A walk of the draft the editor didn't know (made elsewhere meanwhile) is kept.
+        let known = Set(walkList(s.key).compactMap { $0.serverId.flatMap { id(walk, $0) } })
+        let removed = Set((originalWalkSets[s.key] ?? []).compactMap { $0.serverId.flatMap { id(walk, $0) } }).subtracting(known)
+        ws += dw.filter { w in w["id"].int.map { !known.contains($0) && !removed.contains($0) } ?? false }
+            .map { .object(["id": $0["id"], "name": $0["name"]]) }
         return .object(["intro": .from(s.intro.isEmpty ? nil : s.intro), "steps": .array(steps), "boxes": .array(boxes), "walks": .array(ws)])
     }
 }

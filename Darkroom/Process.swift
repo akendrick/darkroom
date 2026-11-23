@@ -733,7 +733,7 @@ private struct WalkStepSheet: View {
             if let s = target.stepId { stepId = list.first { $0.serverId == s }?.id }
             else {
                 let steps = edit.doc.sections.first { $0.key == sectionKey }?.steps ?? []
-                if let m = target.makes { edit.newWalks[sectionKey] = m; edit.walks[sectionKey] = [] }
+                if let m = target.makes { edit.addNewWalk(sectionKey, makes: m, what: WalkDraft.what(makes: m, store.snapshot)) }
                 guard steps.indices.contains(target.block) else { stepId = edit.addWalkStep(sectionKey, block: nil); return }
                 // A step with nothing in the walk yet starts from its own words.
                 let o = steps[target.block]
@@ -829,6 +829,48 @@ struct BoxView: View {
 /// A step copied in View all steps, ready to paste anywhere.
 enum CopiedStep { case overview(ProcStep), walk(StepEdit) }
 
+/// "walk-through: Glop", or "3 walk-throughs".
+func walksLine(_ list: [WalkDraft]) -> String? {
+    switch list.count {
+    case 0: return nil
+    case 1: return "walk-through: \(list[0].name)"
+    default: return "\(list.count) walk-throughs"
+    }
+}
+
+/// One walk-through of a stage, as the editor holds it.
+struct WalkDraft: Equatable, Identifiable {
+    var id = UUID()
+    /// nil for a walk made in this edit.
+    var serverId: Int?
+    var name: String
+    /// What it makes, for the list ("makes a print").
+    var what: String
+    /// A new walk: what it makes, as the API takes it.
+    var makes: JSON?
+    var steps: [StepEdit]
+    /// The app had the walk's steps; if not, they're left alone on save.
+    var readable = true
+    /// A batch walk: the kind of chemistry, named from the app's list.
+    var chemistryTypeId: Int?
+
+    /// A new walk's label, from what it makes as the API takes it.
+    static func what(makes m: JSON, _ snap: Snapshot?) -> String {
+        var j = m.object
+        if let t = m["chemistry_type_id"].int { j["type_name"] = .from(snap?.chemistryTypeName(t)) }
+        return what(.object(j))
+    }
+
+    static func what(_ j: JSON) -> String {
+        switch j["makes"].string {
+        case "print": return "makes a print"
+        case "tissue": return "makes a carbon tissue"
+        case "chemistry": return j["type_name"].string.map { "makes \($0)" } ?? "makes a batch"
+        default: return ""
+        }
+    }
+}
+
 /// The process being edited with each stage's walk, saved as one PATCH.
 @MainActor @Observable
 final class ProcessEdit {
@@ -838,48 +880,133 @@ final class ProcessEdit {
     /// is the overview step it sits beside, so the order follows the overview.
     var walks: [String: [StepEdit]] = [:]
     private(set) var originalWalks: [String: [StepEdit]] = [:]
-    /// Walks to create on save: what they make.
-    var newWalks: [String: JSON] = [:]
+    /// Every walk-through of each stage, in order. The chosen one's steps are
+    /// edited in `walks`; the others wait here until they are chosen.
+    var walkSets: [String: [WalkDraft]] = [:]
+    private(set) var originalWalkSets: [String: [WalkDraft]] = [:]
+    /// The walk whose steps show beside the overview, by section key.
+    var chosen: [String: UUID] = [:]
     var copied: CopiedStep?
     private var loaded = false
     var saving = false
     var error: String?
     init(_ d: ProcessDoc) { doc = d; original = d }
 
-    var changed: Bool { doc != original || walks != originalWalks || !newWalks.isEmpty }
+    var changed: Bool { doc != original || allWalkSets() != originalWalkSets }
     func hasWalk(_ key: String) -> Bool { walks[key] != nil }
 
     func load(_ raw: (Int) -> JSON?) {
         guard !loaded else { return }
         loaded = true
         for s in doc.sections {
-            guard let p = s.presetId, let j = raw(p) else { continue }
-            var last: UUID?
-            var list = StepEdit.list(j)
-            for i in list.indices {
-                if let n = list[i].instructionId, let o = s.steps.first(where: { $0.serverId == n }) { last = o.id }
-                // Under no overview step: shown after the one before, but left
-                // unpaired on save unless it is moved.
-                else { list[i].loose = true; list[i].block0 = last }
-                list[i].block = last
+            let ids = s.walkIds.isEmpty ? [s.presetId].compactMap { $0 } : s.walkIds
+            var set: [WalkDraft] = []
+            for p in ids {
+                // A walk the app can't read is kept, and its steps left alone on save.
+                guard let j = raw(p) else { set.append(WalkDraft(serverId: p, name: "Walk-through", what: "", steps: [], readable: false)); continue }
+                var last: UUID?
+                var list = StepEdit.list(j)
+                for i in list.indices {
+                    if let n = list[i].instructionId, let o = s.steps.first(where: { $0.serverId == n }) { last = o.id }
+                    // Under no overview step: shown after the one before, but left
+                    // unpaired on save unless it is moved.
+                    else { list[i].loose = true; list[i].block0 = last }
+                    list[i].block = last
+                }
+                set.append(WalkDraft(serverId: p, name: j["name"].string ?? "", what: WalkDraft.what(j), steps: sorted(list, s), chemistryTypeId: j["chemistry_type_id"].int))
             }
-            walks[s.key] = list
-            resort(s.key)
+            guard let first = set.first(where: \.readable) else { if !set.isEmpty { walkSets[s.key] = set }; continue }
+            walkSets[s.key] = set
+            chosen[s.key] = first.id
+            walks[s.key] = first.steps
         }
         originalWalks = walks
+        originalWalkSets = allWalkSets()
     }
 
     private func section(_ key: String) -> Int? { doc.sections.firstIndex { $0.key == key } }
 
-    /// Puts the walk steps in the order of the overview steps they sit beside.
-    func resort(_ key: String) {
-        guard let i = section(key), let list = walks[key] else { return }
-        let rank = Dictionary(uniqueKeysWithValues: doc.sections[i].steps.enumerated().map { ($0.element.id, $0.offset) })
-        let sorted = list.enumerated().sorted {
+    /// The walk steps in the order of the overview steps they sit beside.
+    private func sorted(_ list: [StepEdit], _ s: ProcSection) -> [StepEdit] {
+        let rank = Dictionary(uniqueKeysWithValues: s.steps.enumerated().map { ($0.element.id, $0.offset) })
+        return list.enumerated().sorted {
             let a = $0.element.block.flatMap { rank[$0] } ?? -1, b = $1.element.block.flatMap { rank[$0] } ?? -1
             return (a, $0.offset) < (b, $1.offset)
         }.map(\.element)
-        if sorted != list { walks[key] = sorted }
+    }
+
+    /// Puts the walk steps in the order of the overview steps they sit beside.
+    func resort(_ key: String) {
+        guard let i = section(key), let list = walks[key] else { return }
+        let s = sorted(list, doc.sections[i])
+        if s != list { walks[key] = s }
+    }
+
+    // MARK: A stage's walk-throughs
+
+    /// Every walk of every stage, with the chosen ones' steps as edited.
+    func allWalkSets() -> [String: [WalkDraft]] {
+        var out = walkSets
+        for (k, list) in walks { if let c = chosen[k], let i = out[k]?.firstIndex(where: { $0.id == c }) { out[k]?[i].steps = list } }
+        return out.filter { !$0.value.isEmpty }
+    }
+    func walkList(_ key: String) -> [WalkDraft] { allWalkSets()[key] ?? [] }
+    func chosenWalk(_ key: String) -> WalkDraft? { walkList(key).first { $0.id == chosen[key] } }
+
+    /// Shows another walk's steps beside the overview.
+    func choose(_ key: String, _ id: UUID) {
+        let all = walkList(key)
+        guard let w = all.first(where: { $0.id == id }), w.readable else { return }
+        walkSets[key] = all
+        chosen[key] = id
+        walks[key] = w.steps
+        resort(key)
+    }
+
+    /// A new walk-through in this stage, chosen at once. Its name starts as the
+    /// stage's, numbered if another walk has it already.
+    @discardableResult func addNewWalk(_ key: String, makes: JSON, what: String) -> UUID {
+        var all = walkList(key)
+        let title = section(key).map { doc.sections[$0].title } ?? "Walk-through"
+        var name = title, n = 2
+        while all.contains(where: { $0.name == name }) { name = "\(title) \(n)"; n += 1 }
+        let w = WalkDraft(serverId: nil, name: name, what: what, makes: makes, steps: [])
+        all.append(w)
+        walkSets[key] = all
+        chosen[key] = w.id
+        walks[key] = []
+        return w.id
+    }
+
+    func renameWalk(_ key: String, _ id: UUID, _ name: String) {
+        var all = walkList(key)
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        all[i].name = name
+        walkSets[key] = all
+    }
+
+    func moveWalks(_ key: String, from: IndexSet, to: Int) {
+        var all = walkList(key)
+        all.move(fromOffsets: from, toOffset: to)
+        walkSets[key] = all
+    }
+
+    /// Takes a walk out of this draft (the published revision keeps it).
+    func removeWalk(_ key: String, _ id: UUID) {
+        var all = walkList(key)
+        all.removeAll { $0.id == id }
+        walkSets[key] = all
+        guard chosen[key] == id else { return }
+        if let next = all.first(where: \.readable) { chosen[key] = next.id; walks[key] = next.steps; resort(key) }
+        else { chosen[key] = nil; walks[key] = nil }
+    }
+
+    /// Two walks of one stage can't share a name, and none can be blank.
+    func walkNameProblem(_ key: String) -> String? {
+        let names = walkList(key).map { $0.name.trimmingCharacters(in: .whitespaces) }
+        if names.contains("") { return "Every walk-through needs a name." }
+        if Set(names).count < names.count { return "Two walk-throughs in this stage have the same name." }
+        return nil
     }
 
     func moveOverview(_ key: String, _ id: UUID, by d: Int) {
@@ -1012,7 +1139,7 @@ final class ProcessEdit {
         let secs = doc.sections.map { s -> JSON in
             guard case .object(var o) = s.payload() else { return s.payload() }
             o["next_index"] = .from(s.nextKey.flatMap { k in doc.sections.firstIndex { $0.key == k } })
-            if let w = newWalks[s.key] { o["walk"] = w }
+            if let m = chosenWalk(s.key)?.makes { o["walk"] = m }
             if let list = walks[s.key] {
                 o["walk_steps"] = .array(list.map { st in
                     guard case .object(var p) = st.payload(sameAsIndex: st.sameAs.flatMap { ref in list.firstIndex { $0.id == ref } }) else { return .null }
@@ -1065,7 +1192,7 @@ struct ProcessEditor: View {
                                 Text("\(i)").font(Theme.display(22)).frame(width: 28, alignment: .trailing)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(s.title.isEmpty ? "Untitled" : s.title).font(Theme.body.weight(.bold))
-                                    Text(["\(s.steps.count) steps", s.presetId.flatMap { store.snapshot?.preset($0)?.name }.map { "walk-through: \($0)" }]
+                                    Text(["\(s.steps.count) steps", walksLine(edit.walkList(s.key))]
                                         .compactMap { $0 }.joined(separator: " · ")).font(Theme.small).opacity(0.7)
                                 }
                             }
@@ -1164,6 +1291,8 @@ private struct SectionForm: View {
     @State private var startFrom: ProcStep?
     @State private var overview: StepRoute?
     @State private var walkStep: StepRoute?
+    /// "+ New walk-through": asking what it makes.
+    @State private var askMakes = false
 
     private var key: String { section.key }
     private var walk: [StepEdit] { edit.walks[key] ?? [] }
@@ -1175,7 +1304,7 @@ private struct SectionForm: View {
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 Picker("Optional next step", selection: $section.nextKey) {
                     Text("None").tag(String?.none)
-                    ForEach(edit.doc.sections.filter { $0.key != key && ($0.presetId != nil || edit.newWalks[$0.key] != nil) }) { Text($0.title).tag(Optional($0.key)) }
+                    ForEach(edit.doc.sections.filter { $0.key != key && ($0.presetId != nil || edit.hasWalk($0.key)) }) { Text($0.title).tag(Optional($0.key)) }
                 }
                 .font(Theme.small).listRowBackground(Theme.bg)
                 TextField("Introduction", text: $section.intro, axis: .vertical).lineLimit(2...8).font(Theme.small)
@@ -1199,6 +1328,7 @@ private struct SectionForm: View {
             } header: {
                 Text("BOXES · materials, cautions, options").font(Theme.label).foregroundStyle(Theme.bright)
             }
+            walksSection
             Section {
                 let rows = edit.rows(key)
                 ForEach(rows) { r in
@@ -1211,7 +1341,9 @@ private struct SectionForm: View {
                 Button("+ Add step") { edit.addOverview(key, after: nil) }
                     .font(Theme.body.weight(.bold)).listRowBackground(Theme.bg)
             } header: {
-                Text("STEPS · overview with its walk steps under it · drag to match them up").font(Theme.label).foregroundStyle(Theme.bright)
+                Text(edit.walkList(key).count > 1
+                     ? "STEPS · overview with the steps of “\(edit.chosenWalk(key)?.name ?? "")” under it · drag to match them up"
+                     : "STEPS · overview with its walk steps under it · drag to match them up").font(Theme.label).foregroundStyle(Theme.bright)
             } footer: {
                 Text(section.isDraft || section.serverId != nil
                      ? "Save puts these directions into the stage's draft (Rev \(section.draftRevNo ?? (section.revNo ?? 0) + 1)); walks keep the published ones until it is published from the stage page. The title and next stage change at once."
@@ -1232,7 +1364,7 @@ private struct SectionForm: View {
                          number: i + 1, earlier: walk.prefix(i).filter { !$0.isSelect })
             }
         }
-        .confirmationDialog("What does this walk make?", isPresented: Binding(get: { startFrom != nil }, set: { if !$0 { startFrom = nil } }), titleVisibility: .visible) {
+        .confirmationDialog("What does this walk make?", isPresented: Binding(get: { startFrom != nil || askMakes }, set: { if !$0 { startFrom = nil; askMakes = false } }), titleVisibility: .visible) {
             if let t = typeId { Button("A print") { create(["makes": .string("print"), "photo_type_id": .from(t)]) } }
             Button("A carbon tissue") { create(["makes": .string("tissue")]) }
             ForEach(store.snapshot?.chemistryTypes ?? [], id: \.id) { c in
@@ -1291,10 +1423,49 @@ private struct SectionForm: View {
     }
 
     private func create(_ walk: [String: JSON]) {
-        edit.newWalks[key] = .object(walk)
-        edit.walks[key] = []
+        edit.addNewWalk(key, makes: .object(walk), what: WalkDraft.what(makes: .object(walk), store.snapshot))
         if let s = startFrom { walkStep = StepRoute(id: edit.addWalkStep(key, from: s)) }
-        startFrom = nil
+        startFrom = nil; askMakes = false
+    }
+
+    /// The stage's walk-throughs: the chosen one's steps show under the
+    /// overview below. Rename, reorder, add or take one out of the draft.
+    @ViewBuilder private var walksSection: some View {
+        let list = edit.walkList(key)
+        Section {
+            ForEach(list) { w in
+                HStack(spacing: 10) {
+                    Button { edit.choose(key, w.id) } label: {
+                        Image(systemName: edit.chosen[key] == w.id ? "largecircle.fill.circle" : "circle")
+                            .font(.system(size: 20, weight: .bold)).frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!w.readable)
+                    .accessibilityLabel("Show the steps of \(w.name)")
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("Walk name", text: Binding(get: { w.name }, set: { edit.renameWalk(key, w.id, $0) }))
+                            .font(Theme.body.weight(.bold))
+                        Text([w.chemistryTypeId.flatMap { store.snapshot?.chemistryTypeName($0) }.map { "makes \($0)" } ?? w.what, "\(w.steps.count) steps", w.serverId == nil ? "new" : nil, w.readable ? nil : "steps not loaded"]
+                            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(Theme.label).opacity(0.75)
+                    }
+                }
+                .foregroundStyle(.black)
+                .listRowBackground(edit.chosen[key] == w.id ? Theme.walkBar : Theme.box)
+            }
+            .onMove { edit.moveWalks(key, from: $0, to: $1) }
+            .onDelete { $0.map { list[$0].id }.forEach { edit.removeWalk(key, $0) } }
+            // A new stage takes one walk until it's saved; then add more.
+            if section.serverId != nil || list.isEmpty {
+                Button("+ New walk-through") { askMakes = true }.font(Theme.body.weight(.bold)).listRowBackground(Theme.bg)
+            }
+        } header: {
+            Text("WALK-THROUGHS · tap the circle to show its steps below").font(Theme.label).foregroundStyle(Theme.bright)
+        } footer: {
+            if let p = edit.walkNameProblem(key) { Text(p).font(Theme.small.weight(.bold)) }
+            else if list.isEmpty { Text("No walk-through: this stage is reference only.").font(Theme.small) }
+            else if section.serverId != nil { Text("Removing one takes it out of the draft; the published revision keeps it.").font(Theme.small) }
+        }
     }
 }
 
