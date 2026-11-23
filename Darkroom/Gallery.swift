@@ -66,7 +66,7 @@ struct PrintsGrid: View {
                 ForEach(shown, id: \.self["id"].int) { p in
                     let id = p["id"].int ?? 0
                     NavigationLink {
-                        PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
+                        PrintPager(prints: shown, startId: id, base: store.server.base) { await load(); return shown }
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Tile(print: p, base: store.server.base)
@@ -184,15 +184,24 @@ private struct Tile: View {
 /// right for the one before. Paging, so it wins over the swipe back to the grid
 /// (which still works from the first print).
 private struct PrintPager: View {
-    let prints: [JSON]
     let base: URL
-    let reload: () async -> Void
+    /// Reloads the gallery and hands back its new list, so the open page
+    /// shows an edit straight away (the list it was opened with goes stale).
+    let fetch: () async -> [JSON]
+    @State private var prints: [JSON]
     @State private var id: Int?
     @State private var editing = false
 
-    init(prints: [JSON], startId: Int, base: URL, reload: @escaping () async -> Void) {
-        self.prints = prints; self.base = base; self.reload = reload
+    init(prints: [JSON], startId: Int, base: URL, reload: @escaping () async -> [JSON]) {
+        self.base = base; self.fetch = reload
+        _prints = State(initialValue: prints)
         _id = State(initialValue: startId)
+    }
+
+    private func reload() async {
+        let fresh = await fetch()
+        // Keep the pages as they are if the gallery came back empty (offline).
+        if !fresh.isEmpty { prints = fresh }
     }
 
     private var ids: [Int] { prints.compactMap { $0["id"].int } }

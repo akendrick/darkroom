@@ -167,8 +167,9 @@ struct HomeView: View {
                     }
                 }
             } else if let p = Self.parts.first(where: { $0.key == openPart }) {
+                // All four stay where they are; the open one is outlined and closes it.
                 HStack(spacing: 8) {
-                    ForEach(Self.parts.filter { $0.key != openPart }, id: \.key) { tile($0, small: true) }
+                    ForEach(Self.parts, id: \.key) { tile($0, small: true) }
                 }
                 part(p.key, p.title)
                 partContent(p.key)
@@ -200,23 +201,29 @@ struct HomeView: View {
     }
 
     private func tile(_ p: (key: String, title: String), small: Bool = false) -> some View {
-        Button { withAnimation(.snappy) { openPart = p.key; if small { scroll.scrollTo(edge: .top) } } } label: {
-            Theme.red
+        let on = small && openPart == p.key
+        return Button {
+            withAnimation(.snappy) { openPart = on ? "" : p.key; if small && !on { scroll.scrollTo(edge: .top) } }
+        } label: {
+            (on ? Color.clear : Theme.red)
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
                     VStack(spacing: small ? 3 : 10) {
-                        partIcon(p.key, size: small ? 62 : 96)
-                        Text(p.title).font(Theme.display(small ? 16 : 26)).tracking(small ? 1 : 2).lineLimit(1).minimumScaleFactor(0.7)
+                        partIcon(p.key, size: small ? 46 : 96)
+                        Text(p.title).font(Theme.display(small ? 14 : 26)).tracking(small ? 0.5 : 2).lineLimit(1).minimumScaleFactor(0.6)
                     }
-                    .foregroundStyle(Theme.onRed)
+                    .foregroundStyle(on ? Theme.red : Theme.onRed)
                     .padding(small ? 4 : 8)
                 }
+                .overlay { if on { RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.red, lineWidth: 3) } }
                 .clipShape(.rect(cornerRadius: 14))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
-        .matchedGeometryEffect(id: p.key, in: partSpace)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityHint(on ? "Closes \(p.title.capitalized)" : "")
+        .matchedGeometryEffect(id: on ? p.key + "-tile" : p.key, in: partSpace)
     }
 
     private var favourites: [Preset] { (store.snapshot?.presets ?? []).filter(\.favourite) }

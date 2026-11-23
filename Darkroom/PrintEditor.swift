@@ -15,6 +15,9 @@ struct PrintEditor: View {
     @State private var date: String
     @State private var notes: String
     @State private var inGallery: Bool
+    /// The stage it was made from: sets the print's stage revision. A walked
+    /// print starts on its walk's stage, and keeps its revision unless changed.
+    @State private var stage: Int?
     @State private var layers: [[String: Int]]
     /// Each layer's name in the stack (Key, Cyan) and what else it used.
     @State private var layerNames: [String]
@@ -44,6 +47,7 @@ struct PrintEditor: View {
         _date = State(initialValue: print["date_exposed"].string ?? "")
         _notes = State(initialValue: print["notes"].string ?? "")
         _inGallery = State(initialValue: print["show_in_gallery"].flag)
+        _stage = State(initialValue: print["rev_stage_id"].int)
         let ls = print["layers"].array.map { l in
             var d: [String: Int] = [:]
             for f in SelectWhat.allCases.map(\.layerField) { if let v = l[f].int { d[f] = v } }
@@ -73,6 +77,7 @@ struct PrintEditor: View {
                     Field(label: "Date exposed") {
                         TextField("YYYY-MM-DD", text: $date).keyboardType(.numbersAndPunctuation)
                     }
+                    stageField
                     Field(label: "Notes") { TextField("", text: $notes, axis: .vertical).lineLimit(2...6) }
                     Toggle("Show in the gallery", isOn: $inGallery).font(Theme.body.weight(.bold)).tint(Theme.red)
                         .foregroundStyle(Theme.red)
@@ -177,6 +182,26 @@ struct PrintEditor: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line, lineWidth: 1))
     }
 
+    private var stageField: some View {
+        Field(label: "Stage it was made from") {
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Stage it was made from", selection: $stage) {
+                    Text("—").tag(Int?.none)
+                    ForEach(store.snapshot?.processes ?? []) { p in
+                        ForEach(p.sections.filter { $0.serverId != nil }) { st in
+                            Text("\(p.name) › \(st.title)").tag(st.serverId)
+                        }
+                    }
+                }.pickerStyle(.menu).labelsHidden()
+                if let r = print["rev_label"].string, stage == print["rev_stage_id"].int {
+                    Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.dim)
+                } else if stage != nil {
+                    Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.dim)
+                }
+            }
+        }
+    }
+
     private func save() async {
         guard let id = print["id"].int else { return }
         error = nil
@@ -198,7 +223,7 @@ struct PrintEditor: View {
         }
         let d = date.trimmingCharacters(in: .whitespaces)
         if !d.isEmpty && d.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) == nil { error = "The date is YYYY-MM-DD, like \(Clock.today())"; return }
-        let body: JSON = .object([
+        var body: [String: JSON] = [
             "title": .from(title.isEmpty ? nil : title),
             "edition": .from(edition.trimmingCharacters(in: .whitespaces).isEmpty ? nil : String(edition.trimmingCharacters(in: .whitespaces).prefix(20))),
             "date_exposed": .from(d.isEmpty ? nil : d),
@@ -211,10 +236,12 @@ struct PrintEditor: View {
                 return .object(o)
             }),
             "steps": .array(out),
-        ])
+        ]
+        // Sent only when changed: a print walked from Rev 1 keeps Rev 1.
+        if stage != print["rev_stage_id"].int { body["stage_id"] = .from(stage) }
         busy = true; defer { busy = false }
         do {
-            _ = try await store.server.request("darkroom-api.php?res=photo&id=\(id)", method: "PATCH", body: body)
+            _ = try await store.server.request("darkroom-api.php?res=photo&id=\(id)", method: "PATCH", body: .object(body))
             if let img = newPhoto, let jpeg = img.shrunk(to: 1800).jpegData(compressionQuality: 0.9) {
                 _ = try await store.server.upload(jpeg: jpeg, photoId: id)
             }

@@ -93,7 +93,7 @@ final class AppStore {
         await flushNow()
         do {
             let raw = try await server.sync()
-            snapshot = Snapshot(raw: raw, fetchedAt: .now)
+            take(raw)
             // Prints still in progress on the server (started on the web page)
             // can be carried on here. A draft on this phone wins over the server's copy.
             for p in snapshot!.inProgress {
@@ -197,13 +197,29 @@ final class AppStore {
 
     /// A chemistry batch mixed now, made on the server straight away (a print's
     /// steps point at it, so it isn't queued like a material).
+    /// A new sync feed. A walk on this phone whose walk-through has since been
+    /// archived (or deleted) on the website keeps its old copy, so the walk can
+    /// still be finished: kept as an earlier revision, so it isn't offered again.
+    private func take(_ raw: JSON) {
+        var raw = raw
+        let fresh = Set(raw["presets"].array.compactMap { $0["id"].int })
+        let used = Set(drafts.values.map(\.presetId)).subtracting(fresh)
+        let kept: [JSON] = (snapshot?.raw["presets"].array ?? []).compactMap { j in
+            guard let id = j["id"].int, used.contains(id), case .object(var o) = j else { return nil }
+            o["revision_state"] = .string("old"); o["stage_id"] = .null; o["archived"] = .bool(false); o["is_default"] = .bool(false)
+            return .object(o)
+        }
+        if !kept.isEmpty, case .object(var o) = raw { o["presets"] = .array(raw["presets"].array + kept); raw = .object(o) }
+        snapshot = Snapshot(raw: raw, fetchedAt: .now)
+    }
+
     func addBatch(label: String, typeId: Int, percent: Double?, volume: Double?) async throws -> Int {
         let body: JSON = .object(["label": .from(label.isEmpty ? nil : label), "type_id": .from(typeId),
                                   "percent_solution": .from(percent), "volume_ml": .from(volume),
                                   "date_created": .string(Clock.today()), "mixed_at": .string(Clock.stamp())])
         let r = try await server.request("darkroom-api.php?res=chemistry", method: "POST", body: body)
         guard let id = r["id"].int else { throw ServerError(message: "Server error", status: 500) }
-        if let raw = try? await server.sync() { snapshot = Snapshot(raw: raw, fetchedAt: .now); save() }
+        if let raw = try? await server.sync() { take(raw); save() }
         return id
     }
 
@@ -249,7 +265,7 @@ final class AppStore {
         // New materials went up: fetch the lists so they show with their server names.
         if listsChanged, let raw = try? await server.sync() {
             listsChanged = false
-            snapshot = Snapshot(raw: raw, fetchedAt: .now); save()
+            take(raw); save()
         }
     }
 
