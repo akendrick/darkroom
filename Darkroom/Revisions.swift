@@ -284,8 +284,11 @@ private struct ChangeLine: View {
             guard a.count > 2, a[1] != .null || a[2] != .null else { return "\(label) changed" }
             return "\(label): \(a[1].string ?? "—") → \(a[2].string ?? "—")"
         }
+        // "Removed introduction", not "Removed introduction “Introduction”".
+        let area = change["area"].string
+        let name = change["name"].string.flatMap { $0.lowercased() == area?.lowercased() ? nil : $0 }
         VStack(alignment: .leading, spacing: 2) {
-            Text([(change["change"].string ?? "").capitalized, change["area"].string, change["name"].string.map { "“\($0)”" },
+            Text([(change["change"].string ?? "").capitalized, area, name.map { "“\($0)”" },
                   change["walk"].string.map { "in \($0)" }].compactMap { $0 }.joined(separator: " "))
                 .font(Theme.small.weight(.bold))
             ForEach(fields, id: \.self) { Text($0).font(Theme.label) }
@@ -312,7 +315,7 @@ struct RevisionsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text((stage?.title ?? "Stage").uppercased()).font(Theme.display(34))
                 NavigationLink {
-                    PrintSearchView(initial: PrintFilter(stageId: stageId), title: "Prints: \(stage?.title ?? "stage")")
+                    PrintSearchView(initial: PrintFilter(stageId: stageId))
                 } label: { linkRow("Prints made from \(stage?.title ?? "this stage")", sub: "any revision") }
                 if let error { Text(error).font(Theme.small) }
                 if list == nil && error == nil { ProgressView().tint(Theme.red) }
@@ -438,7 +441,7 @@ struct RevisionDetail: View {
         if let c = r["change_notes"].string { Text(c).font(Theme.small) }
         if let c = r["comments"].string { Text("“\(c)”").font(Theme.small).italic() }
         if !draft {
-            NavigationLink { PrintSearchView(initial: PrintFilter(stageId: stageId, revisionId: revisionId), title: "Prints: \(title) Rev \(n)") }
+            NavigationLink { PrintSearchView(initial: PrintFilter(stageId: stageId, revisionId: revisionId)) }
                 label: { linkRow("Prints made from \(title) Rev \(n)") }
         }
         if let since {
@@ -448,6 +451,10 @@ struct RevisionDetail: View {
             ForEach(Array(ch.enumerated()), id: \.offset) { _, c in ChangeLine(change: c) }
         }
         if !r["is_current"].flag && !draft {
+            if let d = stage?.draftRevNo {
+                Text("Rev \(d) draft is open. Edit, publish or discard it from the stage page.")
+                    .font(Theme.small)
+            }
             HStack(spacing: 18) {
                 if stage?.draftId == nil {
                     Button("Start a draft from Rev \(n)") { act { try await store.draftFrom(stage: stageId, revision: revisionId) } }
@@ -629,11 +636,10 @@ struct PrintSearchBar: View {
 /// Prints found from a stage or one of its revisions, as their own page.
 struct PrintSearchView: View {
     let initial: PrintFilter
-    let title: String
     var body: some View {
         ScrollView { PrintsGrid(initial: initial).padding(16) }
             .background(Theme.bg)
-            .navigationTitle(title)
+            .navigationTitle("Prints")
             .navigationBarTitleDisplayMode(.inline)
     }
 }
