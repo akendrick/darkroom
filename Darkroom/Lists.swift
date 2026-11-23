@@ -5,7 +5,8 @@ import SwiftUI
 /// described by its fields, the same ones darkroom-api.php keeps, and read
 /// and saved straight to the server (so these need a connection).
 struct ListSpec: Identifiable, Hashable {
-    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links }
+    /// stage: the Stage a batch or tissue was made from (its current revision is recorded).
+    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links, stage }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -30,6 +31,7 @@ struct ListSpec: Identifiable, Hashable {
         ListSpec(id: "chemistry", title: "Chemistry batches", fields: [
             .init(key: "label", label: "Label", kind: .text),
             .init(key: "type_id", label: "Type", kind: .pick("chemistry_types")),
+            .init(key: "stage_id", label: "Stage it was made from", kind: .stage),
             .init(key: "date_created", label: "Made", kind: .date),
             .init(key: "percent_solution", label: "Strength %", kind: .number),
             .init(key: "volume_ml", label: "Volume ml", kind: .number),
@@ -38,18 +40,19 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["date_created"], archives: true,
-           rowTitle: { chemLabel($0) }, rowSub: { [$0["date_created"].string, $0["sheets_used"].int.map { "\($0) used" }].compactMap { $0 }.joined(separator: " · ") }),
+           rowTitle: { chemLabel($0) }, rowSub: { [$0["date_created"].string, $0["rev_label"].string, $0["sheets_used"].int.map { "\($0) used" }].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "carbon_tissue", title: "Carbon tissue", fields: [
             .init(key: "title_id", label: "Name", kind: .text),
             .init(key: "date_poured", label: "Poured", kind: .date),
             .init(key: "size", label: "Size", kind: .text),
             .init(key: "chemistry_id", label: "Glop batch", kind: .pick("chemistry")),
+            .init(key: "stage_id", label: "Stage it was made from", kind: .stage),
             .init(key: "amount_poured", label: "Amount poured", kind: .text),
             .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["date_poured"], archives: true,
            rowTitle: { Material(what: .carbon_tissue, row: $0).label },
-           rowSub: { j in [Material(what: .carbon_tissue, row: j).sub, LinkRow.summary(j["links"].array).map { "from " + $0 }].compactMap { $0 }.joined(separator: " · ") }),
+           rowSub: { j in [Material(what: .carbon_tissue, row: j).sub, j["rev_label"].string, LinkRow.summary(j["links"].array).map { "from " + $0 }].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "support_paper", title: "Support papers", fields: [
             .init(key: "mark", label: "Mark", kind: .text),
             .init(key: "paper_id", label: "Paper", kind: .pick("paper")),
@@ -435,6 +438,8 @@ struct RowForm: View {
     @State private var busy = false
     @State private var error: String?
     @State private var confirmArchive = false
+    /// The stage the row says it was made from, so it is sent only when changed.
+    @State private var originalStage: Int?
 
     var body: some View {
         NavigationStack {
@@ -507,6 +512,24 @@ struct RowForm: View {
                 Text(f.label.uppercased()).font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
                 LinksEditor(rows: $links)
             }
+        case .stage:
+            Field(label: f.label) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker(f.label, selection: Binding(get: { values[f.key]?.int }, set: { values[f.key] = .from($0) })) {
+                        Text("—").tag(Int?.none)
+                        ForEach(store.snapshot?.processes ?? []) { p in
+                            ForEach(p.sections.filter { $0.serverId != nil }) { st in
+                                Text("\(p.name) › \(st.title)").tag(st.serverId)
+                            }
+                        }
+                    }.pickerStyle(.menu).labelsHidden()
+                    if let r = row?["rev_label"].string, values[f.key]?.int == originalStage {
+                        Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.dim)
+                    } else if values[f.key]?.int != nil {
+                        Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.dim)
+                    }
+                }
+            }
         }
     }
 
@@ -517,6 +540,7 @@ struct RowForm: View {
     private func setUp() async {
         if values.isEmpty {
             for f in spec.fields where f.kind != .links { values[f.key] = row?[f.key] ?? .null }
+            if spec.fields.contains(where: { $0.kind == .stage }) { originalStage = row?["rev_stage_id"].int; values["stage_id"] = .from(originalStage) }
             links = (row?["links"].array ?? []).map(LinkRow.init(link:))
             if row == nil {     // a new one is made today
                 for f in spec.fields where f.kind == .date && spec.required.contains(f.key) { values[f.key] = .string(fmt(.now, false)) }
@@ -532,6 +556,8 @@ struct RowForm: View {
             error = "\(spec.fields.first { $0.key == miss }?.label ?? miss) is needed"; return
         }
         var body = values.merging(spec.fixed) { _, f in f }
+        // Sent only when changed: a batch walked from Rev 1 keeps Rev 1.
+        if body["stage_id"]?.int == originalStage { body.removeValue(forKey: "stage_id") }
         if spec.fields.contains(where: { $0.kind == .links }) {
             // Only when the server sent links (one without them would lose nothing either way).
             if row == nil || (row?["links"] ?? .null) != .null { body["links"] = .array(links.compactMap(\.asLink)) }

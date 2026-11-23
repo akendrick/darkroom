@@ -42,6 +42,12 @@ struct ProcSection: Identifiable, Equatable, Hashable {
     var nextKey: String?        // the stage to go on to; same as its key
     var steps: [ProcStep]
     var boxes: [ProcBox]
+    /// The published revision shown and walked: its id, number and day.
+    var revisionId: Int?, revNo: Int?, publishedAt: String?
+    /// The stage's draft revision, if one is open (its changes aren't walked yet).
+    var draftId: Int?, draftRevNo: Int?
+    /// Holds the draft's directions rather than the published ones (in Edit).
+    var isDraft = false
     var id: String { key }
 
     init(title: String = "") {
@@ -53,6 +59,27 @@ struct ProcSection: Identifiable, Equatable, Hashable {
         walkIds = j["walks"].array.compactMap { $0["id"].int }
         steps = j["steps"].array.map(ProcStep.init); boxes = j["boxes"].array.map(ProcBox.init)
         nextKey = j["next_section_id"].int.map { "s\($0)" }
+        revisionId = j["current_revision_id"].int; revNo = j["rev_no"].int; publishedAt = j["rev_published_at"].string
+        draftId = j["draft"]["id"].int; draftRevNo = j["draft"]["rev_no"].int
+    }
+
+    /// The same stage holding its draft's directions (darkroom-api.php?res=stage_revision&id=).
+    func withDraft(_ r: JSON) -> ProcSection {
+        var s = self
+        s.intro = r["intro"].string ?? ""
+        s.steps = r["steps"].array.map(ProcStep.init); s.boxes = r["boxes"].array.map(ProcBox.init)
+        let walks = r["walks"].array.filter { !$0["archived"].flag }
+        s.walkIds = walks.compactMap { $0["id"].int }
+        s.presetId = s.walkIds.first; s.presetName = walks.first?["name"].string
+        s.isDraft = true; s.draftId = r["id"].int; s.draftRevNo = r["rev_no"].int
+        return s
+    }
+
+    /// "Rev 2 · 21 Nov 2026", or "Rev 3 draft".
+    var revLine: String? {
+        if isDraft { return draftRevNo.map { "Rev \($0) draft" } }
+        guard let revNo else { return nil }
+        return (["Rev \(revNo)", publishedAt.flatMap(Day.short)] as [String?]).compactMap { $0 }.joined(separator: " · ")
     }
 
     func payload() -> JSON {
@@ -98,14 +125,15 @@ struct ProcStep: Identifiable, Equatable, Hashable {
 struct ProcBox: Identifiable, Equatable, Hashable {
     static let kinds = [("list", "List"), ("caution", "Caution"), ("options", "Options"), ("note", "Note")]
     let id = UUID()
+    var serverId: Int?
     var kind = "list"
     var title = ""
     var body = ""
 
     init() {}
-    init(_ j: JSON) { kind = j["kind"].string ?? "list"; title = j["title"].string ?? ""; body = j["body"].string ?? "" }
+    init(_ j: JSON) { serverId = j["id"].int; kind = j["kind"].string ?? "list"; title = j["title"].string ?? ""; body = j["body"].string ?? "" }
     func payload() -> JSON {
-        .object(["kind": .string(kind), "title": .from(title.isEmpty ? nil : title), "body": .string(body)])
+        .object(["id": .from(serverId), "kind": .string(kind), "title": .from(title.isEmpty ? nil : title), "body": .string(body)])
     }
     var kindName: String { Self.kinds.first { $0.0 == kind }?.1 ?? kind.capitalized }
 }
@@ -116,10 +144,6 @@ extension Snapshot {
 }
 
 extension AppStore {
-    func saveProcess(_ e: ProcessEdit) async throws {
-        _ = try await server.request("darkroom-api.php?res=process&id=\(e.doc.id)", method: "PATCH", body: e.payload())
-        await refresh()
-    }
     /// Stars a walk, or takes its star off. Needs a connection.
     func setFavourite(_ preset: Int, on: Bool) async throws {
         _ = try await server.request("darkroom-api.php?res=process_preset&id=\(preset)", method: "PATCH", body: .object(["favourite": .from(on ? 1 : 0)]))
@@ -220,7 +244,7 @@ struct ProcessesList: View {
             .buttonStyle(TreeRowStyle(fill: Theme.stageBar, text: Theme.stageText))
             if let w = store.snapshot?.preset(s.presetId) { icons(w) }
             else {
-                Button { definingStage = s.key; defining = p } label: {
+                Button { Task { await store.loadDrafts(p); definingStage = s.key; defining = store.editingDoc(p) } } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.red).frame(width: 88, height: 54)
                 }
                 .accessibilityLabel("Create walkthrough for \(s.title)")
@@ -314,7 +338,8 @@ struct ProcessView: View {
                                 Text("\(i + 1)").font(Theme.display(30)).frame(width: 34, alignment: .trailing)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(s.title).font(Theme.body.weight(.bold)).multilineTextAlignment(.leading)
-                                    Text(["\(s.steps.count) steps", s.presetId != nil ? "walk-through" : nil].compactMap { $0 }.joined(separator: " · "))
+                                    Text(["\(s.steps.count) steps", s.presetId != nil ? "walk-through" : nil, s.revNo.map { "Rev \($0)" },
+                                          s.draftId != nil ? "draft open" : nil].compactMap { $0 }.joined(separator: " · "))
                                         .font(Theme.small).foregroundStyle(Theme.dim)
                                 }
                                 Spacer()
@@ -334,9 +359,9 @@ struct ProcessView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button(busy ? "PDF…" : "PDF") { Task { await showPdf(p) } }.disabled(busy || p.sections.isEmpty)
                 }
-                ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true } }
+                ToolbarItem(placement: .primaryAction) { Button("Edit") { Task { await store.loadDrafts(p); editing = true } } }
             }
-            .sheet(isPresented: $editing) { ProcessEditor(doc: p) }
+            .sheet(isPresented: $editing) { ProcessEditor(doc: store.editingDoc(p)) }
             .quickLookPreview($pdf)
             .homeBulb()
         } else {
@@ -376,7 +401,12 @@ struct SectionPager: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button(busy ? "PDF…" : "PDF") { Task { await showPdf(p, p.sections[i]) } }.disabled(busy)
                 }
-                ToolbarItem(placement: .primaryAction) { Button(editing ? "Done" : "Edit") { withAnimation(.snappy) { editing.toggle() } }.bold(editing) }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(editing ? "Done" : "Edit") {
+                        if editing { withAnimation(.snappy) { editing = false } }
+                        else { Task { await store.loadDrafts(p); withAnimation(.snappy) { editing = true } } }
+                    }.bold(editing)
+                }
             }
             .quickLookPreview($pdf)
             .homeBulb()
@@ -410,11 +440,18 @@ private struct SectionPage: View {
     @State private var startingOn: Int?
     /// The overview steps showing their walk steps as bars.
     @State private var open: Set<Int> = []
+    /// Showing the stage's draft rather than its published revision.
+    @State private var showDraft = false
+
+    /// In Edit, or when asked, the draft (if one is open): edits go into it.
+    private var shownProcess: ProcessDoc { editMode || showDraft ? store.editingDoc(process) : process }
+    private var shown: ProcSection { shownProcess.sections.first { $0.key == section.key } ?? section }
 
     /// The walk's steps by the overview step they belong to.
     private var walkSteps: [Int: [(n: Int, step: StepEdit)]]? {
-        let e = ProcessEdit(process)
+        let e = ProcessEdit(shownProcess)
         e.load { store.rawPreset($0) }
+        let section = shown
         guard let list = e.walks[section.key] else { return nil }
         var out: [Int: [(n: Int, step: StepEdit)]] = [:]
         for (i, w) in list.enumerated() {
@@ -490,7 +527,7 @@ private struct SectionPage: View {
     /// on a process step it becomes the first walk step under it.
     private func drop(_ items: [String], on target: (ProcessEdit.Row) -> Bool) -> Bool {
         guard let sid = items.first.flatMap({ Int($0) }) else { return false }
-        let e = ProcessEdit(process)
+        let e = ProcessEdit(shownProcess)
         e.load { store.rawPreset($0) }
         let rows = e.rows(section.key)
         guard let from = rows.firstIndex(where: { $0.walk?.serverId == sid }),
@@ -529,12 +566,28 @@ private struct SectionPage: View {
 
     var body: some View {
         let walk = walkSteps
+        let section = shown
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(process.name.uppercased()).font(Theme.label).tracking(2).foregroundStyle(Theme.dim)
                 Text("\(number). \(section.title)").font(Theme.display(34)).foregroundStyle(Theme.red)
+                if let line = section.revLine {
+                    if let sid = section.serverId {
+                        NavigationLink { RevisionsView(processId: process.id, stageId: sid) } label: {
+                            HStack(spacing: 6) {
+                                Text(line.uppercased()).tracking(1.5)
+                                Text("· HISTORY").tracking(1.5)
+                                Image(systemName: "chevron.right").font(.caption2.weight(.bold))
+                            }
+                            .font(Theme.label).foregroundStyle(Theme.bright)
+                        }
+                        .accessibilityLabel("\(line). Revisions of \(section.title)")
+                    }
+                }
+                DraftBar(section: shown, showDraft: $showDraft, editing: editMode)
                 if !section.intro.isEmpty { Text(section.intro).font(Theme.body).foregroundStyle(Theme.red) }
-                let stageWalks = (section.walkIds.isEmpty ? [section.presetId].compactMap { $0 } : section.walkIds)
+                // Walks start from the published revision only.
+                let stageWalks = section.isDraft ? [] : (section.walkIds.isEmpty ? [section.presetId].compactMap { $0 } : section.walkIds)
                     .compactMap { store.snapshot?.preset($0) }
                 ForEach(stageWalks) { preset in
                     Button(stageWalks.count > 1 ? "▶ \(preset.name)" : "▶ Begin walk-through") { walks.start(preset: preset) }
@@ -583,8 +636,8 @@ private struct SectionPage: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .sheet(item: $editing) { WalkStepSheet(process: process, sectionKey: section.key, target: $0) }
-        .sheet(item: $editingStep) { OverviewStepSheet(process: process, sectionKey: section.key, stepId: $0.id) }
+        .sheet(item: $editing) { WalkStepSheet(process: shownProcess, sectionKey: section.key, target: $0) }
+        .sheet(item: $editingStep) { OverviewStepSheet(process: shownProcess, sectionKey: section.key, stepId: $0.id) }
         .confirmationDialog("What does this walk make?", isPresented: Binding(get: { startingOn != nil }, set: { if !$0 { startingOn = nil } }), titleVisibility: .visible) {
             if let t = process.photoTypeId { Button("A print") { start(["makes": .string("print"), "photo_type_id": .from(t)]) } }
             Button("A carbon tissue") { start(["makes": .string("tissue")]) }
@@ -596,7 +649,7 @@ private struct SectionPage: View {
 }
 
 /// Widgets left to right, wrapping when a line is full.
-private struct ChipFlow: Layout {
+struct ChipFlow: Layout {
     var spacing: CGFloat = 6
 
     private func frames(_ width: CGFloat, _ views: Subviews) -> [CGRect] {
@@ -753,7 +806,7 @@ private struct OverviewStepSheet: View {
     }
 }
 
-private struct BoxView: View {
+struct BoxView: View {
     let box: ProcBox
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -784,7 +837,7 @@ final class ProcessEdit {
     /// Each stage's walk steps, by section key, in walk order. A step's block
     /// is the overview step it sits beside, so the order follows the overview.
     var walks: [String: [StepEdit]] = [:]
-    private var originalWalks: [String: [StepEdit]] = [:]
+    private(set) var originalWalks: [String: [StepEdit]] = [:]
     /// Walks to create on save: what they make.
     var newWalks: [String: JSON] = [:]
     var copied: CopiedStep?
@@ -805,6 +858,9 @@ final class ProcessEdit {
             var list = StepEdit.list(j)
             for i in list.indices {
                 if let n = list[i].instructionId, let o = s.steps.first(where: { $0.serverId == n }) { last = o.id }
+                // Under no overview step: shown after the one before, but left
+                // unpaired on save unless it is moved.
+                else { list[i].loose = true; list[i].block0 = last }
                 list[i].block = last
             }
             walks[s.key] = list
@@ -844,7 +900,7 @@ final class ProcessEdit {
 
     @discardableResult func addWalkStep(_ key: String, block: UUID?, copy: StepEdit? = nil) -> UUID {
         var st = copy ?? StepEdit()
-        st.id = UUID(); st.serverId = nil; st.sameAs = nil; st.timesUsed = 0; st.block = block
+        st.id = UUID(); st.serverId = nil; st.sameAs = nil; st.timesUsed = 0; st.block = block; st.loose = false
         walks[key, default: []].append(st)
         resort(key)
         return st.id
@@ -960,7 +1016,7 @@ final class ProcessEdit {
             if let list = walks[s.key] {
                 o["walk_steps"] = .array(list.map { st in
                     guard case .object(var p) = st.payload(sameAsIndex: st.sameAs.flatMap { ref in list.firstIndex { $0.id == ref } }) else { return .null }
-                    p["instruction_index"] = .from(st.block.flatMap { b in s.steps.firstIndex { $0.id == b } })
+                    p["instruction_index"] = .from(st.pairedBlock.flatMap { b in s.steps.firstIndex { $0.id == b } })
                     return .object(p)
                 })
             }
@@ -1157,7 +1213,9 @@ private struct SectionForm: View {
             } header: {
                 Text("STEPS · overview with its walk steps under it · drag to match them up").font(Theme.label).foregroundStyle(Theme.bright)
             } footer: {
-                Text("Save sends the whole process; changes are kept when you go back.").font(Theme.small)
+                Text(section.isDraft || section.serverId != nil
+                     ? "Save puts these directions into the stage's draft (Rev \(section.draftRevNo ?? (section.revNo ?? 0) + 1)); walks keep the published ones until it is published from the stage page. The title and next stage change at once."
+                     : "A new stage: Save writes its first directions, Rev 1.").font(Theme.small)
             }
         }
         .environment(\.editMode, .constant(.active))

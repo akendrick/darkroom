@@ -32,6 +32,11 @@ struct StepEdit: Identifiable, Equatable {
     var checklist = ""          // check steps: one item per line
     var instructionId: Int?     // the overview step it belongs to, as the server has it
     var block: UUID?            // while editing a process: that overview step (nil: before the first)
+    /// Belongs to no overview step: shown under block0, and saved unpaired while it stays there.
+    var loose = false
+    var block0: UUID?
+    /// The overview step it is saved under.
+    var pairedBlock: UUID? { loose && block == block0 ? nil : block }
 
     init() {}
 
@@ -126,44 +131,73 @@ extension Snapshot {
 @MainActor @Observable
 final class PresetEdit {
     let id: Int
+    /// The published walk, which keeps the default mark (a draft's copy doesn't).
+    let marksId: Int
+    /// A stage's published walk: the server puts the change into the stage's draft.
+    let toDraft: Bool
+    /// The stage whose draft the changes go into, for saying so.
+    var draftOf: String?
     var name: String
     var isDefault: Bool
     var steps: [StepEdit]
     private let original: [StepEdit]
-    private let originalName: String, originalDefault: Bool
+    private let originalName: String
+    let originalDefault: Bool
     var saving = false
     var error: String?
 
-    init(_ j: JSON) {
-        let n = j["name"].string ?? "", d = j["is_default"].flag
+    /// `marks`: the published walk, when `j` is its copy in the stage's draft.
+    init(_ j: JSON, marks: JSON? = nil) {
+        let n = j["name"].string ?? "", d = (marks ?? j)["is_default"].flag
         id = j["id"].int ?? 0
+        marksId = marks?["id"].int ?? id
+        toDraft = marks == nil && j["revision_state"].string == "current"
         name = n; isDefault = d; originalName = n; originalDefault = d
         let s = StepEdit.list(j)
         steps = s; original = s
     }
 
-    var changed: Bool { steps != original || name != originalName || isDefault != originalDefault }
+    var contentChanged: Bool { steps != original || name != originalName }
+    var changed: Bool { contentChanged || isDefault != originalDefault }
 
+    /// The walk's name and steps.
     func payload() -> JSON {
         let list = steps.map { st -> JSON in
             let idx = st.sameAs.flatMap { ref in steps.firstIndex { $0.id == ref } }
             return st.payload(sameAsIndex: idx)
         }
-        return .object(["name": .string(name), "is_default": .from(isDefault ? 1 : 0), "steps": .array(list)])
+        var o: [String: JSON] = ["name": .string(name), "steps": .array(list)]
+        if toDraft { o["to_draft"] = 1 }
+        return .object(o)
     }
 }
 
 extension AppStore {
     /// The preset as the server sent it, with every step field.
     func rawPreset(_ id: Int) -> JSON? {
-        snapshot?.raw["presets"].array.first { $0["id"].int == id }
+        snapshot?.raw["presets"].array.first { $0["id"].int == id } ?? draftWalk(id)
     }
 
     /// Saves a walk-through's design. Needs a connection: unlike prints,
     /// these aren't queued, so two phones can't quietly overwrite each other.
     func savePreset(_ p: PresetEdit) async throws {
-        _ = try await server.request("darkroom-api.php?res=process_preset&id=\(p.id)", method: "PATCH", body: p.payload())
+        if p.contentChanged {
+            _ = try await server.request("darkroom-api.php?res=process_preset&id=\(p.id)", method: "PATCH", body: p.payload())
+        }
+        if p.isDefault != p.originalDefault {
+            _ = try await server.request("darkroom-api.php?res=process_preset&id=\(p.marksId)", method: "PATCH", body: .object(["is_default": .from(p.isDefault ? 1 : 0)]))
+        }
         await refresh()
+        stageDrafts = [:]   // fetched again when next shown
+    }
+
+    /// The stage whose published walk this is, if it has a draft open.
+    func draftStage(of presetId: Int) -> (process: ProcessDoc, stage: ProcSection)? {
+        guard let w = rawPreset(presetId), w["revision_state"].string == "current", let sid = w["stage_id"].int else { return nil }
+        for p in snapshot?.processes ?? [] {
+            if let s = p.sections.first(where: { $0.serverId == sid }) { return (p, s) }
+        }
+        return nil
     }
 }
 
@@ -229,7 +263,20 @@ struct PresetEditView: View {
             if let edit { PresetStepsView(edit: edit) }
             else { Text("This walk-through is no longer on the server.").font(Theme.small) }
         }
-        .onAppear { if edit == nil, let raw = store.rawPreset(presetId) { edit = PresetEdit(raw) } }
+        .task {
+            guard edit == nil, let raw = store.rawPreset(presetId) else { return }
+            // A stage's walk: edited as it stands in the stage's draft, if one is open.
+            if let (p, s) = store.draftStage(of: presetId) {
+                if s.draftId != nil {
+                    await store.loadDrafts(p)
+                    if let sid = s.serverId, let copy = store.stageDrafts[sid]?["walks"].array.first(where: { $0["copied_from_id"].int == presetId }) {
+                        let e = PresetEdit(copy, marks: raw); e.draftOf = s.title; edit = e; return
+                    }
+                }
+                let e = PresetEdit(raw); e.draftOf = s.title; edit = e; return
+            }
+            edit = PresetEdit(raw)
+        }
     }
 }
 
@@ -279,7 +326,11 @@ struct PresetStepsView: View {
                         .disabled(edit.steps.count < 2 && !reordering)
                 }
             } footer: {
-                Text("A step used by earlier prints is kept with them when removed here.").font(Theme.small)
+                if let d = edit.draftOf {
+                    Text("Changes go into the \(d) draft. Walks keep using the published walk until the draft is published from the stage page.").font(Theme.small)
+                } else {
+                    Text("A step used by earlier prints is kept with them when removed here.").font(Theme.small)
+                }
             }
             if let e = edit.error {
                 Text(e).font(Theme.small).listRowBackground(Theme.bg)

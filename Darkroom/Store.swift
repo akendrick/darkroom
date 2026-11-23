@@ -34,6 +34,8 @@ final class AppStore {
     var pendingRunDeletes: [Int] = []   // discarded glop / tissue walks still on the server
     var pendingLayerDeletes: [String] = []  // discarded later layers still on the server: "photoId:layer"
     var made: Made?
+    /// Stage drafts fetched for Edit and the editor, by stage id (needs a connection, so not kept).
+    var stageDrafts: [Int: JSON] = [:]
     /// Phone-only material id → server id, once sent.
     var idMap: [Int: Int] = [:]
     var online = true

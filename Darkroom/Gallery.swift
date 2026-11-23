@@ -8,6 +8,8 @@ import SwiftUI
 struct PrintsGrid: View {
     /// Reloads when this changes (the home screen's lists refresh).
     var reload: Date?
+    /// Opens searching for these (from a stage or one of its revisions).
+    var initial: PrintFilter? = nil
     @Environment(AppStore.self) private var store
     @Environment(Walks.self) private var walks
     @State private var prints: [JSON] = []
@@ -18,14 +20,26 @@ struct PrintsGrid: View {
     @State private var editing: JSON?
     @State private var deleting: JSON?
     @State private var round = 0        // a refresh tries photos that failed again
+    @State private var filter = PrintFilter()
+    @State private var searching = false
+    @State private var options: SearchOptions?
+    /// The search's matches in order, each with why it matched; nil when not searching.
+    @State private var found: [(id: Int, why: [String])]?
     /// Prints hidden on this phone, by id ("12,15").
     @AppStorage("hiddenPrints") private var hiddenList = ""
 
     private var hidden: Set<Int> { Set(hiddenList.split(separator: ",").compactMap { Int($0) }) }
     private var shown: [JSON] {
-        prints.filter { p in
+        // A search shows every print it finds, photo or not.
+        if let found {
+            return found.compactMap { f in prints.first { $0["id"].int == f.id } }.filter { showHidden || !hidden.contains($0["id"].int ?? 0) }
+        }
+        return prints.filter { p in
             (withoutPhotos || p["image_path"].string != nil) && (showHidden || !hidden.contains(p["id"].int ?? 0))
         }
+    }
+    private func why(_ id: Int) -> String? {
+        found?.first { $0.id == id }.map { $0.why.joined(separator: "; ") }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     var body: some View {
@@ -33,17 +47,32 @@ struct PrintsGrid: View {
             HStack {
                 Text("PRINTS").font(Theme.label).tracking(2).foregroundStyle(Theme.dim)
                 Spacer()
+                if initial == nil {
+                    Button { withAnimation(.snappy) { searching.toggle(); if !searching { filter = PrintFilter() } } } label: {
+                        Image(systemName: searching ? "magnifyingglass.circle.fill" : "magnifyingglass").foregroundStyle(Theme.red)
+                    }
+                    .accessibilityLabel(searching ? "Stop searching" : "Search prints")
+                    .padding(.trailing, 10)
+                }
                 Menu {
                     Toggle("Prints without a photo too", isOn: $withoutPhotos)
                     Toggle("Hidden prints too", isOn: $showHidden)
                 } label: { Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(Theme.red) }
             }
+            if searching || initial != nil { PrintSearchBar(filter: $filter, options: options, count: found?.count).padding(.bottom, 4) }
             if loading && prints.isEmpty { ProgressView().tint(Theme.red).frame(maxWidth: .infinity).padding(30) }
             if let error { Text(error).font(Theme.small).foregroundStyle(Theme.dim) }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], spacing: 6) {
                 ForEach(shown, id: \.self["id"].int) { p in
                     let id = p["id"].int ?? 0
-                    NavigationLink(value: id) { Tile(print: p, base: store.server.base) }
+                    NavigationLink {
+                        PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Tile(print: p, base: store.server.base)
+                            if let w = why(id) { Text(w).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.red).lineLimit(3) }
+                        }
+                    }
                         .buttonStyle(.plain)
                         .opacity(hidden.contains(id) ? 0.4 : 1)
                         .contextMenu {
@@ -60,13 +89,15 @@ struct PrintsGrid: View {
             }
             .id(round)
             if !loading && shown.isEmpty && error == nil {
-                Text("No photos yet").font(Theme.small).foregroundStyle(Theme.dim).padding(.vertical, 20)
+                Text(found != nil ? "No prints match" : "No photos yet").font(Theme.small).foregroundStyle(Theme.dim).padding(.vertical, 20)
             }
         }
-        .navigationDestination(for: Int.self) { id in
-            PrintPager(prints: shown, startId: id, base: store.server.base) { await load() }
-        }
         .task(id: reload) { await load() }
+        .task(id: filter) { await search() }
+        .task(id: searching || initial != nil) {
+            if (searching || initial != nil) && options == nil { options = try? await store.searchOptions() }
+        }
+        .onAppear { if let initial, filter.isEmpty, found == nil { filter = initial } }
         .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             if let editing { PrintEditor(print: editing) { await load() } }
         }
@@ -90,6 +121,14 @@ struct PrintsGrid: View {
         do { prints = try await store.server.request("darkroom-api.php?res=photo").array; error = nil; round += 1 }
         catch where Task.isCancelled { }      // a newer reload took over
         catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — photos need a connection" : e.message }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func search() async {
+        guard !filter.isEmpty else { found = nil; return }
+        do { found = try await store.searchPrints(filter); error = nil }
+        catch where Task.isCancelled { }
+        catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — search needs a connection" : e.message }
         catch { self.error = error.localizedDescription }
     }
 
@@ -221,7 +260,7 @@ struct PrintDetail: View {
         guard ls.count > 1 || named else { return [(nil, nil, nil, steps)] }
         return ls.map { l in
             let n = l["layer_no"].int ?? 1
-            let head = ["LAYER \(n)", l["label"].string, l["preset_name"].string, l["date_done"].string,
+            let head = ["LAYER \(n)", l["label"].string, l["preset_name"].string, l["rev_label"].string, l["date_done"].string,
                         l["status"].string == "in_progress" ? "in progress" : nil]
                 .compactMap { $0 }.joined(separator: " · ")
             return (head, l["notes"].string, LinkRow.summary(l["items"].array, item: true),
@@ -236,6 +275,7 @@ struct PrintDetail: View {
                 Text(printName(print).uppercased()).font(Theme.display(36)).foregroundStyle(Theme.red)
                 Text([print["type_name"].string, print["preset_name"].string, print["date_exposed"].string, "#\(print["id"].int ?? 0)"]
                     .compactMap { $0 }.joined(separator: " · ")).font(Theme.small).foregroundStyle(Theme.dim)
+                if let made = madeFrom { Text(made).font(Theme.small.weight(.semibold)).foregroundStyle(Theme.bright) }
                 if let n = print["notes"].string { Text(n).font(Theme.body) }
                 if canAddLayer(print) {
                     Button("Add a layer", systemImage: "square.3.layers.3d") { walks.addLayer(to: print) }
@@ -247,10 +287,13 @@ struct PrintDetail: View {
                     if let it = l.items { Text("Also used: " + it).font(Theme.small).foregroundStyle(Theme.dim) }
                     VStack(spacing: 0) {
                         ForEach(Array(l.steps.enumerated()), id: \.offset) { _, s in
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(s["name"].string ?? "Step").font(Theme.body.weight(.semibold))
-                                Spacer()
-                                Text(stepSummary(s)).font(Theme.small).foregroundStyle(Theme.dim)
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(s["name"].string ?? "Step").font(Theme.body.weight(.semibold))
+                                    Spacer()
+                                    Text(stepSummary(s)).font(Theme.small).foregroundStyle(Theme.dim).multilineTextAlignment(.trailing)
+                                }
+                                ForEach(stepLines(s), id: \.self) { Text($0).font(Theme.small).foregroundStyle(Theme.dim) }
                             }
                             .padding(.vertical, 8)
                             Divider()
@@ -376,8 +419,42 @@ struct PrintDetail: View {
         }
     }
 
+    /// "Made from Print Rev 2 · tissue from Glop Rev 1": the stage revisions it was walked from.
+    private var madeFrom: String? {
+        var parts: [String] = []
+        let ls = print["layers"].array
+        // One layer: its revision here (more than one: each layer's heading says).
+        var revs: [String] = []
+        if ls.count <= 1 {
+            for r in [print["rev_label"].string, ls.first?["rev_label"].string].compactMap({ $0 }) where !revs.contains(r) { revs.append(r) }
+        }
+        if !revs.isEmpty { parts.append("Made from " + revs.joined(separator: ", ")) }
+        let tissue = ls.compactMap { l -> String? in
+            l["ct_rev_label"].string.map { ls.count > 1 ? "layer \(l["layer_no"].int ?? 1) tissue from \($0)" : "tissue from \($0)" }
+        }
+        parts += tissue
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// What was recorded on the step, on one line: time, temperature,
+    /// humidity, pH, amount, the pour's size, and what was used.
     private func stepSummary(_ s: JSON) -> String {
         if s["skipped"].flag { return "skipped" }
-        return [s["seconds"].int.map(Duration.format), s["temp"].double.map { "\($0.formatted()) °C" }].compactMap { $0 }.joined(separator: " · ")
+        let pour: String? = {
+            if let l = s["length_cm"].double, let w = s["width_cm"].double { return "\(Amount.format(l)) × \(Amount.format(w)) cm" }
+            return s["area_cm2"].double.map { "\(Amount.format($0)) cm²" }
+        }()
+        let light = [s["light_source"].string, s["light_watts"].int.map { "\($0) W" }, s["light_distance_cm"].int.map { "\($0) cm away" }].compactMap { $0 }
+        return [s["seconds"].int.map(Duration.format), s["temp"].double.map { "\($0.formatted()) °C" },
+                s["humidity"].double.map { "\($0.formatted()) % RH" }, s["ph"].double.map { "pH \($0.formatted())" },
+                pour, s["amount"].double.map { Amount.format($0) + (s["unit"].string.map { " " + $0 } ?? "") },
+                s["chem_label"].string, s["material_label"].string, light.isEmpty ? nil : light.joined(separator: " ")]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// The things ticked on a checklist, and the step's notes.
+    private func stepLines(_ s: JSON) -> [String] {
+        let ticked = Checklist.lines(s["checked"].string)
+        return [ticked.isEmpty ? nil : "✓ " + ticked.joined(separator: ", "), s["notes"].string].compactMap { $0 }
     }
 }
