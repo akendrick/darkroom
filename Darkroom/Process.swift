@@ -242,7 +242,9 @@ struct ProcessesList: View {
                 Text(s.title).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
             }
             .buttonStyle(TreeRowStyle(fill: Theme.stageBar, text: Theme.stageText))
-            if let w = store.snapshot?.preset(s.presetId) { icons(w) }
+            let ws = (s.walkIds.isEmpty ? [s.presetId].compactMap { $0 } : s.walkIds).compactMap { store.snapshot?.preset($0) }
+            if ws.count > 1 { icons(ws) }
+            else if let w = ws.first { icons(w) }
             else {
                 Button { Task { await store.loadDrafts(p); definingStage = s.key; defining = store.editingDoc(p) } } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.red).frame(width: 88, height: 54)
@@ -268,6 +270,32 @@ struct ProcessesList: View {
                     .foregroundStyle(w.favourite ? Theme.bright : Theme.dim).frame(width: 44, height: 54)
             }
             .accessibilityLabel(w.favourite ? "Remove from favourites" : "Add to favourites")
+        }
+    }
+
+    /// A stage holding several walks: the runner and the star each ask which.
+    private func icons(_ ws: [Preset]) -> some View {
+        HStack(spacing: 0) {
+            Menu {
+                ForEach(ws) { w in Button(w.name) { walks.start(preset: w) } }
+            } label: {
+                Image(systemName: "figure.run").font(.system(size: 26, weight: .bold)).foregroundStyle(Theme.red).frame(width: 44, height: 54)
+            }
+            .accessibilityLabel("Begin a walk-through: \(ws.map(\.name).joined(separator: ", "))")
+            Menu {
+                ForEach(ws) { w in
+                    Button {
+                        Task {
+                            do { try await store.setFavourite(w.id, on: !w.favourite) } catch { store.message = message(error) }
+                        }
+                    } label: { Label(w.name, systemImage: w.favourite ? "star.fill" : "star") }
+                }
+            } label: {
+                let any = ws.contains(where: \.favourite)
+                Image(systemName: any ? "star.circle.fill" : "star.circle").font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(any ? Theme.bright : Theme.dim).frame(width: 44, height: 54)
+            }
+            .accessibilityLabel("Favourites")
         }
     }
 
@@ -442,15 +470,24 @@ private struct SectionPage: View {
     @State private var open: Set<Int> = []
     /// Showing the stage's draft rather than its published revision.
     @State private var showDraft = false
+    /// The walk whose steps are shown and edited, by name (unique in a revision,
+    /// and the same in a draft as in the revision it came from). nil: the first.
+    @State private var walkName: String?
 
     /// In Edit, or when asked, the draft (if one is open): edits go into it.
     private var shownProcess: ProcessDoc { editMode || showDraft ? store.editingDoc(process) : process }
     private var shown: ProcSection { shownProcess.sections.first { $0.key == section.key } ?? section }
 
-    /// The walk's steps by the overview step they belong to.
-    private var walkSteps: [Int: [(n: Int, step: StepEdit)]]? {
+    /// The stage's walks read in, with the one asked for chosen.
+    private func loaded() -> ProcessEdit {
         let e = ProcessEdit(shownProcess)
         e.load { store.rawPreset($0) }
+        e.choose(section.key, named: walkName)
+        return e
+    }
+
+    /// The chosen walk's steps by the overview step they belong to.
+    private func walkSteps(_ e: ProcessEdit) -> [Int: [(n: Int, step: StepEdit)]]? {
         let section = shown
         guard let list = e.walks[section.key] else { return nil }
         var out: [Int: [(n: Int, step: StepEdit)]] = [:]
@@ -476,7 +513,7 @@ private struct SectionPage: View {
     }
 
     private func add(_ i: Int, hasWalk: Bool) {
-        if hasWalk { editing = WalkStepTarget(stepId: nil, block: i) } else { startingOn = i }
+        if hasWalk { editing = WalkStepTarget(stepId: nil, block: i, walk: walkName) } else { startingOn = i }
     }
 
     /// One step's walk steps as a line of widgets. Tapping one opens the group as
@@ -498,6 +535,29 @@ private struct SectionPage: View {
             }
         }
         .padding(.leading, 44)
+    }
+
+    /// A stage with several walks: which one's steps are shown beside the
+    /// overview (and edited, in Edit).
+    private func walkPicker(_ names: [String], chosen: String?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("WALK STEPS SHOWN").font(Theme.label.weight(.bold)).tracking(2).foregroundStyle(Theme.dim)
+            ChipFlow {
+                ForEach(names, id: \.self) { n in
+                    let on = n == chosen
+                    Button { withAnimation(.snappy) { walkName = n } } label: {
+                        Text(n).font(Theme.label.weight(.bold)).lineLimit(1)
+                            .foregroundStyle(on ? .black : Theme.red)
+                            .padding(.horizontal, 10).padding(.vertical, 8)
+                            .background(on ? Theme.walkBar : .clear, in: .rect(cornerRadius: 6))
+                            .overlay { if !on { RoundedRectangle(cornerRadius: 6).stroke(Theme.walkBar, lineWidth: 2) } }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+        }
+        .padding(.top, 4)
     }
 
     private func toggle(_ i: Int) {
@@ -527,8 +587,7 @@ private struct SectionPage: View {
     /// on a process step it becomes the first walk step under it.
     private func drop(_ items: [String], on target: (ProcessEdit.Row) -> Bool) -> Bool {
         guard let sid = items.first.flatMap({ Int($0) }) else { return false }
-        let e = ProcessEdit(shownProcess)
-        e.load { store.rawPreset($0) }
+        let e = loaded()
         let rows = e.rows(section.key)
         guard let from = rows.firstIndex(where: { $0.walk?.serverId == sid }),
               let to = rows.firstIndex(where: target), from != to else { return false }
@@ -542,7 +601,7 @@ private struct SectionPage: View {
 
     private func barBody(_ i: Int, _ n: Int, _ w: StepEdit) -> some View {
         HStack(spacing: 4) {
-            Button { if editMode { editing = WalkStepTarget(stepId: w.serverId, block: i) } else { toggle(i) } } label: {
+            Button { if editMode { editing = WalkStepTarget(stepId: w.serverId, block: i, walk: walkName) } else { toggle(i) } } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(n). \(w.name)").font(Theme.small.weight(.bold)).multilineTextAlignment(.leading)
                     Text(store.snapshot?.summary(w) ?? "").font(Theme.label).opacity(0.75).multilineTextAlignment(.leading)
@@ -552,7 +611,7 @@ private struct SectionPage: View {
             }
             .buttonStyle(.plain)
             if editMode {
-                Button { editing = WalkStepTarget(stepId: w.serverId, block: i) } label: {
+                Button { editing = WalkStepTarget(stepId: w.serverId, block: i, walk: walkName) } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40).contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -565,7 +624,9 @@ private struct SectionPage: View {
     }
 
     var body: some View {
-        let walk = walkSteps
+        let e = loaded()
+        let walk = walkSteps(e)
+        let named = e.walkList(section.key).filter(\.readable)
         let section = shown
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -595,6 +656,7 @@ private struct SectionPage: View {
                     if stageWalks.count == 1 { Text(preset.name).font(Theme.small).foregroundStyle(Theme.dim) }
                 }
                 ForEach(section.boxes) { b in BoxView(box: b) }
+                if named.count > 1 { walkPicker(named.map(\.name), chosen: e.chosenWalk(section.key)?.name) }
                 if let before = walk?[-1] {
                     dropdown(-1, before, hasWalk: true).padding(.leading, -44)
                 }
@@ -679,6 +741,8 @@ struct ChipFlow: Layout {
 private struct WalkStepTarget: Identifiable {
     let id = UUID()
     let stepId: Int?, block: Int
+    /// The stage's walk it belongs to, by name; nil for the first.
+    var walk: String? = nil
     /// Starts the stage's walk: what it makes.
     var makes: JSON?
 }
@@ -730,6 +794,7 @@ private struct WalkStepSheet: View {
         .onAppear {
             guard stepId == nil else { return }
             edit.load { store.rawPreset($0) }
+            if target.makes == nil { edit.choose(sectionKey, named: target.walk) }
             if let s = target.stepId { stepId = list.first { $0.serverId == s }?.id }
             else {
                 let steps = edit.doc.sections.first { $0.key == sectionKey }?.steps ?? []
@@ -961,6 +1026,12 @@ final class ProcessEdit {
         chosen[key] = id
         walks[key] = w.steps
         resort(key)
+    }
+
+    /// Chooses a walk by its name; nothing happens for nil or a name not there.
+    func choose(_ key: String, named name: String?) {
+        guard let name, let w = walkList(key).first(where: { $0.name == name && $0.readable }) else { return }
+        if chosen[key] != w.id { choose(key, w.id) }
     }
 
     /// A new walk-through in this stage, chosen at once. Its name starts as the
