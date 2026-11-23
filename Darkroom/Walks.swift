@@ -17,6 +17,7 @@ final class Walks {
 
     init(store: AppStore) {
         self.store = store
+        Voice.walks = self
         // A Watch press goes to the print it was made on.
         PhoneWatch.shared.onCommand = { [weak self] cmd, page in
             guard let self else { return }
@@ -29,16 +30,54 @@ final class Walks {
     func start(left: Bool = false) {
         guard let snap = store.snapshot else { return }
         let lastPreset = snap.recent.first?["preset_id"].int ?? snap.inProgress.first?["preset_id"].int
-        guard let p = snap.preset(lastPreset) ?? snap.presets.first(where: \.isDefault) ?? snap.presets.first else { return }
+        let prints = snap.presets.filter(\.makesPrint)
+        guard let p = prints.first(where: { $0.id == lastPreset }) ?? prints.first(where: \.isDefault) ?? prints.first ?? snap.presets.first else { return }
         start(preset: p, left: left)
     }
 
-    /// A new print on this walk-through.
-    func start(preset p: Preset, left: Bool = false) {
-        let d = PrintDraft(typeId: p.photoTypeId, presetId: p.id)
-        store.update(d)
+    /// A new print, batch or tissue on this walk-through. `made` is what the
+    /// walk before made, already chosen: the glop for a tissue, the tissue for a print.
+    /// `chosen`: the walk-through was picked already (a favourite), so a print
+    /// opens at its first step too; Back still reaches the start page, and the
+    /// title can be given on the last page.
+    func start(preset p: Preset, made: Made? = nil, chosen: Bool = false, left: Bool = false) {
+        var d = PrintDraft(preset: p)
+        if !p.makesPrint || made != nil || chosen { d.page = 1 }   // chosen already: open at its first step
+        if let made {
+            if made.makes == "tissue" { d.layers[0][SelectWhat.carbon_tissue.layerField] = made.id }
+            else if let s = p.steps.first(where: \.choosesBatch) {
+                var r = StepRecord(); r.chemistryId = made.id; r.startedAt = Clock.stamp(); r.done = true
+                d.recs[PrintDraft.key(s, layer: 0)] = r
+            }
+        }
+        show(d, left: left)   // the walk adds it to the store, new
+    }
+
+    /// A finished print walked again for one more layer.
+    func addLayer(to p: JSON, left: Bool = false) {
+        guard var d = PrintDraft(addingLayerTo: p) else { return }
+        if store.snapshot?.preset(d.presetId) == nil {
+            let prints = store.snapshot?.presets.filter(\.makesPrint) ?? []
+            guard let p = prints.first(where: \.isDefault) ?? prints.first else { return }
+            d.presetId = p.id
+        }
         show(d, left: left)
     }
+
+    /// The walk-through that carries on from what was just made: a tissue from
+    /// a glop batch, a print from a tissue.
+    func next(after m: Made) -> Preset? {
+        if let linked = store.snapshot?.nextPreset(after: m.presetId) { return linked }
+        let ps = store.snapshot?.presets ?? []
+        if m.makes == "tissue" {
+            let prints = ps.filter { $0.makesPrint && $0.steps.contains { $0.selectWhat == .carbon_tissue } }
+            return prints.first(where: \.isDefault) ?? prints.first
+        }
+        return ps.first { p in p.steps.contains { $0.choosesBatch && ($0.chemistryTypeId == nil || $0.chemistryTypeId == m.typeId) } }
+    }
+
+    /// Back to the start page: every print open is saved and stays in progress.
+    func home() { for m in open { m.saveAndExit() } }
 
     /// Carries on at the first page not done yet.
     func resume(_ d: PrintDraft, left: Bool = false) {
@@ -223,13 +262,15 @@ extension AppStore {
         [d.title.isEmpty ? d.defaultTitle(snapshot) : d.title, d.edition ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// "3 of 7 steps · print #12 · not sent yet"
+    /// "3 of 7 steps · print #12 · layer 2 · not sent yet"
     func progress(_ d: PrintDraft) -> String {
         let pages = d.pages(snapshot?.preset(d.presetId))
         let steps = pages.filter { $0.step != nil }
         let done = steps.filter { d.isDone($0) }.count
         let send = d.unsent || d.pendingImage != nil ? " · not sent yet" : ""
-        return "\(done) of \(steps.count) steps\(d.photoId.map { " · print #\($0)" } ?? "")\(send)"
+        let what = d.isMake ? (snapshot?.preset(d.presetId)?.name ?? "walk-through")
+                            : d.photoId.map { "print #\($0)" + (d.layer > 1 ? " · layer \(d.layer)" : "") }
+        return "\(done) of \(steps.count) steps\(what.map { " · " + $0 } ?? "")\(send)"
     }
 }
 

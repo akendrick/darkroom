@@ -23,6 +23,10 @@ final class WalkModel {
 
     var onClose: (() -> Void)?
 
+    /// The print as it was when opened, for Exit without saving; nil when it
+    /// started here, so there is nothing to go back to.
+    private var opened: PrintDraft?
+
     /// Which half of the screen in multi-print; nil with one print. The left
     /// one is shown, and alerts, black on red.
     enum Side { case left, right }
@@ -37,7 +41,10 @@ final class WalkModel {
         self.clientId = draft.clientId
         self.side = side
         self.last = draft
-        if store.drafts[clientId] == nil { store.update(draft) }
+        if store.drafts[clientId] == nil {
+            if draft.recordId != nil && draft.newLayer != true { opened = draft }   // carried on from knotwork.ca
+            store.update(draft)
+        } else { opened = store.drafts[clientId] }
         if self.draft.page >= pages.count { self.draft.page = pages.count - 1 }
         watchAlarm()
         pushWatch()
@@ -48,11 +55,15 @@ final class WalkModel {
     var pages: [WalkPage] { draft.pages(preset) }
     var page: WalkPage { pages[min(draft.page, pages.count - 1)] }
     var stepPages: [WalkPage] { pages.filter { $0.step != nil } }
-    var multiLayer: Bool { draft.layers.count > 1 }
+    /// "L2" on a print's second layer and after.
+    var layerTag: String? { !draft.isMake && draft.layer > 1 ? "L\(draft.layer)" : nil }
 
     var header: String {
-        guard let n = stepPages.firstIndex(of: page) else { return draft.title.isEmpty ? "Walk-through" : draft.title }
-        return "Step \(n + 1)/\(stepPages.count)" + (page.layer > 0 && multiLayer ? " · L\(page.layer)" : "")
+        guard let n = stepPages.firstIndex(of: page) else {
+            if draft.isMake { return preset?.name ?? "Walk-through" }
+            return draft.title.isEmpty ? "Walk-through" : draft.title
+        }
+        return "Step \(n + 1)/\(stepPages.count)" + (layerTag.map { " · " + $0 } ?? "")
     }
 
     // MARK: The current step's record
@@ -67,36 +78,104 @@ final class WalkModel {
     /// A new record starts from the preset: its time, temperature and batch.
     private func fresh() -> StepRecord {
         var r = StepRecord()
-        if let s = page.step { r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s) }
+        if let s = page.step {
+            r.timer.target = readyTime(s); r.temp = s.defaultTemp; r.chemistryId = draft.sameBatch(s)
+            // Add steps start from the recipe; changing them changes only today's.
+            // A pour's amount comes from the area, typed on the page.
+            if s.isPigment { r.pigments = [PigLine(pigmentId: s.pigmentId, grams: s.defaultAmount)] }
+            else if s.isAdd && !s.isPour { r.amount = s.defaultAmount }
+            else if s.isDry { r.humidity = s.defaultHumidity }
+        }
         return r
     }
 
     // MARK: Start page
 
-    var types: [PhotoType] {
-        let ps = snap?.presets ?? []
-        return (snap?.photoTypes ?? []).filter { t in ps.contains { $0.photoTypeId == t.id } }
-    }
-    var presetsForType: [Preset] { (snap?.presets ?? []).filter { $0.photoTypeId == draft.typeId } }
-    var locked: Bool { draft.photoId != nil }
+    /// A later layer of a print is walked with print walks only.
+    var walkTree: [WalkTree.Proc] { WalkTree.build(snap) { draft.layer == 1 || $0.makesPrint } }
+    /// The walk-through can't change once something is recorded; a new layer
+    /// picks its own until then.
+    var locked: Bool { draft.recordId != nil && !(draft.newLayer == true && draft.recs.isEmpty) }
 
-    func pickType(_ id: Int) {
-        let ps = (snap?.presets ?? []).filter { $0.photoTypeId == id }
-        guard let p = ps.first(where: \.isDefault) ?? ps.first else { return }
-        draft.typeId = id; draft.presetId = p.id
+    func pickPreset(_ id: Int) {
+        guard let p = snap?.preset(id) else { return }
+        var d = draft
+        d.presetId = id; d.makes = p.makesPrint ? nil : p.makes
+        if d.layer == 1 { d.typeId = p.photoTypeId }   // a later layer keeps the print's type
+        draft = d
     }
-    func pickPreset(_ id: Int) { draft.presetId = id }
+
+    // MARK: Add / measure
+
+    var pigLines: [PigLine] {
+        get { rec.pigments ?? [PigLine(pigmentId: page.step?.pigmentId, grams: page.step?.defaultAmount)] }
+        set { rec.pigments = newValue }
+    }
+    /// Keeps the recipe's starting values on the page, so the rows hold still.
+    func keepDefaults() {
+        guard key != nil else { return }
+        var r = rec
+        if page.step?.isPigment == true, r.pigments == nil { r.pigments = pigLines }
+        rec = r
+    }
+
+    func addPigment(name: String) {
+        let p = store.addPigment(name: name)
+        var lines = pigLines
+        if let i = lines.firstIndex(where: { $0.pigmentId == nil }) { lines[i].pigmentId = p.id } else { lines.append(PigLine(pigmentId: p.id)) }
+        pigLines = lines
+        status = "Added \(name)"
+    }
+
+    // MARK: Choosing a batch
+
+    /// Batches of the step's type, newest first: the glop for a tissue.
+    func batchList(_ s: Step) -> [Batch] { batches(for: s).sorted { $0.id > $1.id } }
+
+    func pickBatch(_ id: Int) {
+        var r = rec
+        r.chemistryId = id; r.done = true
+        if r.startedAt == nil { r.startedAt = Clock.stamp() }
+        rec = r
+    }
 
     // MARK: Choosing a material
 
-    func chosen(_ what: SelectWhat) -> Int? { draft.layers[max(page.layer, 1) - 1][what.layerField] }
+    func chosen(_ what: SelectWhat) -> Int? {
+        let i = draft.layerIndex(page.layer)
+        return draft.layers.indices.contains(i) ? draft.layers[i][what.layerField] : nil
+    }
 
-    /// A per-layer page sets that layer; a whole-print page sets every layer.
+    /// A print walk sets its one layer; in a batch or tissue walk a per-layer
+    /// page sets that layer and a whole-walk page every layer.
     func pick(_ what: SelectWhat, _ id: Int?) {
-        let targets = page.layer > 0 ? [page.layer - 1] : Array(draft.layers.indices)
+        let targets = !draft.isMake ? [0] : page.layer > 0 ? [page.layer - 1] : Array(draft.layers.indices)
         var d = draft
         for i in targets { d.layers[i][what.layerField] = id }
         draft = d
+    }
+
+    /// A choose page with nothing chosen yet: Next waits for it.
+    var choiceMissing: Bool {
+        guard let s = page.step, s.isSelect else { return false }
+        if s.materialKindId != nil { return rec.materialId == nil }
+        if s.choosesBatch { return rec.chemistryId == nil }
+        return s.selectWhat.map { chosen($0) == nil } ?? false
+    }
+
+    /// One of the owner's own kinds of material. On a choose page that's the
+    /// page done; on a timed page Next still finishes it.
+    func pickMaterial(_ id: Int?) {
+        var r = rec
+        r.materialId = id
+        if page.step?.isSelect == true { r.done = id != nil; if r.startedAt == nil { r.startedAt = Clock.stamp() } }
+        rec = r
+    }
+
+    func addMaterial(kind: Int, name: String, maker: String?) {
+        let m = store.addMaterial(kind: kind, name: name, maker: maker)
+        pickMaterial(m.id)
+        status = "Added \(name)"
     }
 
     func addMaterial(_ what: SelectWhat, name: String, paperId: Int?) {
@@ -184,6 +263,10 @@ final class WalkModel {
         alarmTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(400))
+                if let self, let end = self.behindEnd, end <= .now {
+                    self.behindEnd = nil
+                    if !StepAlarm.shared.usable { Alarm.ring() }
+                }
                 guard let self, let key = self.key, var r = self.draft.recs[key], r.timer.isRunning,
                       !r.alarmed, let left = r.timer.remaining(), left <= 0 else { continue }
                 r.alarmed = true
@@ -213,15 +296,41 @@ final class WalkModel {
 
     private var notificationId: String { "step-timer-\(clientId)" }
 
+    /// The end of a step left running behind (see next()), rung in the app here
+    /// and by AlarmKit or a notification when the phone is locked.
+    private var behindEnd: Date?
+    private var behindKey: String { "\(clientId)-behind" }
+
+    private func ringLater(at end: Date, title: String) {
+        behindEnd = end
+        StepAlarm.shared.set(behindKey, end, title: title)
+        guard !StepAlarm.shared.usable else { return }
+        let n = UNMutableNotificationContent()
+        n.title = title
+        n.body = "The step you went on from"
+        n.sound = .default
+        n.interruptionLevel = .timeSensitive
+        let t = UNTimeIntervalNotificationTrigger(timeInterval: max(1, end.timeIntervalSinceNow), repeats: false)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "step-timer-\(behindKey)", content: n, trigger: t))
+    }
+
     // MARK: Moving between pages
 
     /// On Next a step counts as done and its time is fixed: the time the
     /// timer actually ran (the set time plus any time over), else the set time.
+    /// A countdown still running with time left is a step going on while the
+    /// next one starts (the pre-bath during the exposure): it gets its full set
+    /// time and still rings when it ends. Paused early, it keeps the time it ran.
     func next() {
         if let s = page.step, !s.isSelect {
             var r = rec
+            if r.timer.isRunning, let t = r.timer.target, let end = r.timer.endsAt, end > .now {
+                ringLater(at: end, title: [sideName, "\(s.name) — time"].compactMap { $0 }.joined(separator: " · "))
+                r.timer.reset(); r.timer.carried = Double(t)   // shows as run to the end
+                r.alarmed = true
+            }
             r.timer.pause()
-            r.seconds = r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
+            r.seconds = !s.timed ? nil : r.timer.carried > 0 ? Int(r.timer.carried.rounded()) : (r.manual ?? readyTime(s))
             if r.startedAt == nil { r.startedAt = Clock.stamp() }
             r.skipped = false; r.done = true
             rec = r
@@ -255,7 +364,7 @@ final class WalkModel {
 
     /// Saves and leaves; the print stays "in progress" to carry on later.
     func saveAndExit() {
-        if draft.photoId == nil && draft.page == 0 && !draft.unsent {   // nothing started yet
+        if (draft.recordId == nil || draft.newLayer == true) && draft.page == 0 && !draft.unsent && draft.recs.isEmpty {   // nothing started yet
             store.drafts[clientId] = nil; store.save()
         } else {
             send(draft)
@@ -270,8 +379,22 @@ final class WalkModel {
         close()
     }
 
+    /// Leaves without keeping this visit's changes: a print started here is
+    /// thrown away; one opened from earlier goes back to how it was (and is
+    /// sent like that, since each page was sent as it went).
+    func exitWithoutSaving() {
+        guard var d = opened else { return discard() }
+        d.photoId = d.photoId ?? draft.photoId
+        d.runId = d.runId ?? draft.runId
+        if d.recordId == nil { last = d; store.update(d) } else { send(d) }
+        close()
+    }
+
+    var startedHere: Bool { opened == nil }
+
     func finish() {
         var d = draft
+        if d.isMake, (d.label ?? "").isEmpty { d.label = d.suggestedId(snap, pending: store.pendingPigmentCodes) }
         d.finished = true
         send(d)
         close()
@@ -297,21 +420,22 @@ final class WalkModel {
     // MARK: Watch
 
     func pushWatch() {
+        Voice.lastClientId = clientId
         let s = page.step
         // The Watch keeps to the essentials: no tray.
         let meta = (rec.temp ?? s?.defaultTemp).map { "\($0.formatted()) °C" } ?? ""
         var title: String = switch page {
-        case .start: "New print"
+        case .start: draft.makes == "chemistry" ? "New batch" : draft.makes == "tissue" ? "New tissue" : "New print"
         case .finish: "Finish"
         case .step(let st, _): st.name
         }
         // Multi-print: the Watch shows the print last changed, so say which.
         if let side { title = (side == .left ? "L · " : "R · ") + title }
         // A choice still to make on the phone: the Watch's Next waits for it.
-        let canNext = !(s?.isSelect == true && s?.selectWhat.map { chosen($0) == nil } == true)
+        let canNext = !choiceMissing
         PhoneWatch.shared.send(WatchScreen(
             active: true, title: title, step: stepPages.contains(page) ? header.replacingOccurrences(of: "Step ", with: "") : "", detail: meta,
-            hasTimer: s.map { !$0.isSelect } ?? false, timer: rec.timer,
+            hasTimer: s?.hasTimer ?? false, timer: rec.timer,
             canNext: canNext, nextLabel: page == .finish ? "Finish" : "Next", pageKey: pageKey, sentAt: .now))
         pushLive(title: title, meta: meta)
     }
@@ -319,7 +443,7 @@ final class WalkModel {
     /// The same step and timer on the lock screen.
     private func pushLive(title: String, meta: String) {
         var state = StepActivity.ContentState(step: title, detail: header)
-        if let s = page.step, !s.isSelect {
+        if let s = page.step, s.hasTimer {
             let t = rec.timer
             state.detail = [header, s.tray.map { "Tray \($0)" }, meta.isEmpty ? nil : meta].compactMap { $0 }.joined(separator: " · ")
             if let start = t.startedAt {
@@ -340,10 +464,10 @@ final class WalkModel {
         guard pressedOn == pageKey else { pushWatch(); return }
         switch cmd {
         case .next:
-            if let s = page.step, s.isSelect, let w = s.selectWhat, chosen(w) == nil { status = "Choose on the phone first"; pushWatch(); return }
+            if choiceMissing { status = "Choose on the phone first"; pushWatch(); return }
             next()
-        case .pause: if page.step.map({ !$0.isSelect }) ?? false { startPause() }
-        case .restart: if page.step.map({ !$0.isSelect }) ?? false { reset(); startPause() }
+        case .pause: if page.step?.hasTimer == true { startPause() }
+        case .restart: if page.step?.hasTimer == true { reset(); startPause() }
         }
     }
 }

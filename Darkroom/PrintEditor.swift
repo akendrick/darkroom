@@ -16,6 +16,9 @@ struct PrintEditor: View {
     @State private var notes: String
     @State private var inGallery: Bool
     @State private var layers: [[String: Int]]
+    /// Each layer's name in the stack (Key, Cyan) and what else it used.
+    @State private var layerNames: [String]
+    @State private var layerItems: [[LinkRow]]
     @State private var steps: [StepRow]
     @State private var newPhoto: UIImage?
     @State private var camera = false
@@ -47,6 +50,9 @@ struct PrintEditor: View {
             return d
         }
         _layers = State(initialValue: ls.isEmpty ? [[:]] : ls)
+        let raw = print["layers"].array
+        _layerNames = State(initialValue: raw.isEmpty ? [""] : raw.map { $0["label"].string ?? "" })
+        _layerItems = State(initialValue: raw.isEmpty ? [[]] : raw.map { $0["items"].array.map(LinkRow.init(item:)) })
         _steps = State(initialValue: print["steps"].array.enumerated().map { i, s in
             StepRow(id: i, raw: s, time: s["seconds"].int.map(Duration.format) ?? "",
                     temp: s["temp"].double.map { $0.formatted() } ?? "", note: s["notes"].string ?? "",
@@ -74,6 +80,7 @@ struct PrintEditor: View {
                     ForEach(layers.indices, id: \.self) { i in
                         Text(layers.count > 1 ? "LAYER \(i + 1)" : "MATERIALS").font(Theme.label).foregroundStyle(Theme.bright)
                             .padding(.top, 6)
+                        Field(label: "Name") { TextField("Key, Cyan…", text: $layerNames[i]) }
                         ForEach(SelectWhat.allCases, id: \.self) { what in
                             Field(label: what.noun.capitalized) {
                                 Picker(what.noun, selection: Binding(get: { layers[i][what.layerField] },
@@ -84,6 +91,8 @@ struct PrintEditor: View {
                                 }.pickerStyle(.menu).labelsHidden()
                             }
                         }
+                        Text("ALSO USED").font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+                        LinksEditor(rows: $layerItems[i], layer: true)
                     }
 
                     if !steps.isEmpty {
@@ -113,7 +122,7 @@ struct PrintEditor: View {
                 }
             }
             .fullScreenCover(isPresented: $camera) {
-                CameraView { img in camera = false; if let img { newPhoto = img } }.ignoresSafeArea()
+                CameraView(note: { error = $0 }) { img in camera = false; if let img { newPhoto = img } }.ignoresSafeArea()
             }
         }
         .tint(Theme.red)
@@ -194,7 +203,13 @@ struct PrintEditor: View {
             "edition": .from(edition.trimmingCharacters(in: .whitespaces).isEmpty ? nil : String(edition.trimmingCharacters(in: .whitespaces).prefix(20))),
             "date_exposed": .from(d.isEmpty ? nil : d),
             "notes": .from(notes.isEmpty ? nil : notes), "show_in_gallery": .from(inGallery ? 1 : 0),
-            "layers": .array(layers.map { l in .object(l.mapValues { .from($0) }) }),
+            "layers": .array(layers.indices.map { i in
+                var o = layers[i].mapValues { JSON.from($0) }
+                let name = layerNames[i].trimmingCharacters(in: .whitespaces)
+                o["label"] = .from(name.isEmpty ? nil : String(name.prefix(100)))
+                o["items"] = .array(layerItems[i].compactMap(\.asItem))
+                return .object(o)
+            }),
             "steps": .array(out),
         ])
         busy = true; defer { busy = false }
@@ -211,6 +226,9 @@ struct PrintEditor: View {
     }
 
     /// What the server keeps for a step (darkroom-api.php photo_children).
+    /// Everything the server keeps for a step, so the ones this screen doesn't
+    /// show (amounts, pour sides, ticked items, humidity, materials) go back unchanged.
     private static let stepKeys: Set<String> = ["process_step_id", "layer_no", "name", "kind", "tray", "chemistry_id",
-        "started_at", "seconds", "temp", "ph", "skipped", "light_source", "light_watts", "light_distance_cm", "notes"]
+        "material_id", "started_at", "seconds", "temp", "humidity", "ph", "skipped", "amount", "unit", "area_cm2",
+        "length_cm", "width_cm", "checked", "light_source", "light_watts", "light_distance_cm", "notes"]
 }

@@ -8,20 +8,54 @@ struct Snapshot: Codable, Equatable {
 
     var photoTypes: [PhotoType] { raw["photo_types"].array.map(PhotoType.init) }
     var stepKinds: [JSON] { raw["step_kinds"].array }
-    var presets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    /// Every walk the server sent, earlier revisions included (a print in progress may use one).
+    var allPresets: [Preset] { raw["presets"].array.map(Preset.init).filter { !$0.archived } }
+    /// The walks to offer: not a draft or an earlier revision of a stage's walk.
+    var presets: [Preset] { allPresets.filter { $0.revisionState != "old" && $0.revisionState != "draft" } }
+    /// Processes in the order set on the website.
+    var processRows: [JSON] { raw["processes"].array }
+    var walkStages: [JSON] { raw["walk_stages"].array }
+    /// The sub-types a Bath step can be: Fog, Develop… (editable).
+    var bathTypes: [(id: Int, name: String)] {
+        raw["bath_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
+    }
+    /// The walk offered when this one is finished: the walk's own next one,
+    /// else (an older server) the one its stage goes on to.
+    func nextPreset(after id: Int?) -> Preset? {
+        if let n = preset(id)?.nextPresetId { return preset(n) }
+        guard let stage = walkStages.first(where: { $0["preset_id"].int == id }), let n = stage["next_section_id"].int else { return nil }
+        return preset(walkStages.first { $0["id"].int == n }?["preset_id"].int)
+    }
     var batches: [Batch] { raw["chemistry"].array.map(Batch.init).filter { !$0.archived } }
     var papers: [Paper] { raw["papers"].array.map(Paper.init).filter { !$0.archived } }
     var chemistryTypes: [(id: Int, name: String)] {
         raw["chemistry_types"].array.compactMap { j in j["id"].int.map { (id: $0, name: j["name"].string ?? "#\($0)") } }
     }
+    var materialKinds: [MaterialKind] { raw["material_kinds"].array.map(MaterialKind.init).filter { !$0.archived } }
+    /// Materials of a kind made by the owner ("Photo Paper").
+    func materials(_ kind: Int) -> [Material] {
+        raw["materials"].array.filter { $0["kind_id"].int == kind && !$0["archived"].flag }.map(Material.init(generic:))
+    }
+    func kindName(_ id: Int?) -> String? { materialKinds.first { $0.id == id }?.name }
+    var pigments: [Pigment] { raw["pigments"].array.map(Pigment.init).filter { !$0.archived } }
+    func pigment(_ id: Int?) -> Pigment? { pigments.first { $0.id == id } }
+    /// Glop and tissue walk-throughs still going (started here or on the web).
+    var making: [JSON] { raw["making"].array }
+    func chemistryTypeName(_ id: Int?) -> String? { chemistryTypes.first { $0.id == id }?.name }
     var inProgress: [JSON] { raw["in_progress"].array }
     var recent: [JSON] { raw["recent"].array }
 
     func items(_ what: SelectWhat) -> [Material] {
         raw[what.syncKey].array.map { Material(what: what, row: $0) }.filter { !$0.archived }
     }
-    func preset(_ id: Int?) -> Preset? { presets.first { $0.id == id } }
+    func preset(_ id: Int?) -> Preset? { allPresets.first { $0.id == id } }
     func typeName(_ id: Int?) -> String { photoTypes.first { $0.id == id }?.name ?? "Print" }
+}
+
+/// A kind of material the owner made ("Photo Paper"), with its own list.
+struct MaterialKind: Identifiable, Equatable, Hashable {
+    let id: Int, name: String, archived: Bool
+    init(_ j: JSON) { id = j["id"].int ?? 0; name = j["name"].string ?? "Material"; archived = j["archived"].flag }
 }
 
 struct PhotoType: Identifiable, Equatable {
@@ -29,33 +63,123 @@ struct PhotoType: Identifiable, Equatable {
     init(_ j: JSON) { id = j["id"].int ?? 0; name = j["name"].string ?? ""; hasLayers = j["has_layers"].flag }
 }
 
+/// A walk-through. It makes a print of a photo type, a chemistry batch of a
+/// type (glop) or a carbon tissue.
 struct Preset: Identifiable, Equatable {
     let id: Int, photoTypeId: Int, name: String, isDefault: Bool, archived: Bool, steps: [Step]
+    let makes: String, chemistryTypeId: Int?, stageId: Int?, sortOrder: Int
+    /// The walk offered when this one ends (glop → pour a tissue from it).
+    let nextPresetId: Int?
+    /// Starred: a shortcut on the start page.
+    let favourite: Bool
+    /// "current", "draft", "old" (an earlier revision of its stage) or nil (not under a stage).
+    let revisionState: String?
     init(_ j: JSON) {
+        revisionState = j["revision_state"].string
+        stageId = j["stage_id"].int; sortOrder = j["sort_order"].int ?? 0; favourite = j["favourite"].flag
+        nextPresetId = j["next_preset_id"].int
         id = j["id"].int ?? 0; photoTypeId = j["photo_type_id"].int ?? 0; name = j["name"].string ?? ""
+        makes = j["makes"].string ?? "print"; chemistryTypeId = j["chemistry_type_id"].int
         isDefault = j["is_default"].flag; archived = j["archived"].flag
         steps = j["steps"].array.map(Step.init).filter { !$0.archived }
+    }
+    var makesPrint: Bool { makes == "print" }
+}
+
+/// Walks as they are organised on the website: process, stage, walk.
+enum WalkTree {
+    struct Stage: Identifiable { let id: Int, name: String, walks: [Preset] }
+    /// `loose` is what isn't filed under a stage; only "Not filed yet" has any.
+    struct Proc: Identifiable { let id: Int, name: String, stages: [Stage], loose: [Preset] }
+
+    /// Empty stages and processes are left out.
+    static func build(_ snap: Snapshot?, only: (Preset) -> Bool = { _ in true }) -> [Proc] {
+        guard let snap else { return [] }
+        let walks = snap.presets.filter(only).sorted { ($0.sortOrder, $0.id) < ($1.sortOrder, $1.id) }
+        var filed = Set<Int>()
+        var tree: [Proc] = snap.processRows.compactMap { p in
+            guard let id = p["id"].int else { return nil }
+            let stages: [Stage] = snap.walkStages.filter { $0["process_id"].int == id }.compactMap { s in
+                guard let sid = s["id"].int else { return nil }
+                let ws = walks.filter { $0.stageId == sid }
+                return ws.isEmpty ? nil : Stage(id: sid, name: s["name"].string ?? "", walks: ws)
+            }
+            stages.forEach { $0.walks.forEach { filed.insert($0.id) } }
+            return stages.isEmpty ? nil : Proc(id: id, name: p["name"].string ?? "", stages: stages, loose: [])
+        }
+        let loose = walks.filter { !filed.contains($0.id) }
+        if !loose.isEmpty { tree.append(Proc(id: 0, name: "Not filed yet", stages: [], loose: loose)) }
+        return tree
+    }
+}
+
+/// A pigment, with the short code used in batch IDs ("Ind.I").
+struct Pigment: Identifiable, Equatable, Hashable {
+    let id: Int, name: String, shortCode: String?, archived: Bool
+    init(_ j: JSON) { id = j["id"].int ?? 0; name = j["name"].string ?? "#\(j["id"].int ?? 0)"; shortCode = j["short_code"].string; archived = j["archived"].flag }
+    init(id: Int, name: String) { self.id = id; self.name = name; shortCode = nil; archived = false }
+    /// Its own code, else "India Ink" → "Ind.I", "Lampblack" → "Lamp".
+    var short: String {
+        if let c = shortCode, !c.isEmpty { return c }
+        let w = name.split(whereSeparator: { $0 == " " || $0 == "-" }).map(String.init)
+        guard let first = w.first else { return "" }
+        if w.count < 2 { return String(first.prefix(4)).capitalized }
+        return String(first.prefix(3)).capitalized + "." + w.dropFirst().compactMap { $0.first.map { String($0).uppercased() } }.joined()
     }
 }
 
 struct Step: Identifiable, Equatable, Hashable {
     let id: Int, name: String, kind: String, selectWhat: SelectWhat?, perLayer: Bool, asksTemp: Bool
+    /// Chooses one of this kind of material (the owner's own kinds).
+    let materialKindId: Int?
+    /// Off: no timer, just "do this, then Next".
+    let timed: Bool
     let tray: Int?, chemistryTypeId: Int?, defaultSeconds: Int?, minSeconds: Int?, maxSeconds: Int?
     let defaultTemp: Double?, optional: Bool, recordsPh: Bool, lightsOkAfter: Bool
     let notes: String?, sameAsStepId: Int?, archived: Bool
+    /// The server's select_what as sent: also "chemistry" (a batch) and "pigment".
+    let selectRaw: String?
+    /// Add / measure steps: the recipe's amount, its unit, the usual pigment.
+    let defaultAmount: Double?, unit: String?, pigmentId: Int?
+    /// Dry steps: the usual room humidity, %.
+    let defaultHumidity: Double?
+    /// Checklist steps: the things to tick, in order.
+    let checklist: [String]
 
     init(_ j: JSON) {
         id = j["id"].int ?? 0; name = j["name"].string ?? "Step"; kind = j["kind"].string ?? "bath"
         selectWhat = j["select_what"].string.flatMap(SelectWhat.init(rawValue:))
+        materialKindId = j["material_kind_id"].int
+        timed = j["timed"] == .null ? true : j["timed"].flag
         perLayer = j["per_layer"].flag; asksTemp = j["asks_temp"].flag; tray = j["tray"].int
         chemistryTypeId = j["chemistry_type_id"].int; defaultSeconds = j["default_seconds"].int
         minSeconds = j["min_seconds"].int; maxSeconds = j["max_seconds"].int; defaultTemp = j["default_temp"].double
         optional = j["optional"].flag; recordsPh = j["records_ph"].flag; lightsOkAfter = j["lights_ok_after"].flag
         notes = j["notes"].string; sameAsStepId = j["same_as_step_id"].int; archived = j["archived"].flag
+        selectRaw = j["select_what"].string
+        defaultAmount = j["default_amount"].double; unit = j["unit"].string; pigmentId = j["pigment_id"].int
+        defaultHumidity = j["default_humidity"].double
+        checklist = Checklist.lines(j["checklist"].string)
     }
 
+    var isImportant: Bool { kind == "important" }
+    var isDry: Bool { kind == "dry" }
     var isSelect: Bool { kind == "select" }
     var isExposure: Bool { kind == "exposure" }
+    /// A list of things to tick; Next works with none ticked.
+    var isCheck: Bool { kind == "check" }
+    /// A page with a timer: not a choice, and not a "do this, then Next" step.
+    var hasTimer: Bool { !isSelect && timed }
+    /// An amount to measure, changeable on the day.
+    var isAdd: Bool { kind == "add" }
+    /// An add step listing pigments and grams.
+    var isPigment: Bool { isAdd && selectRaw == "pigment" }
+    /// A pour: its length and width today, then the amount, suggested from the area
+    /// at defaultAmount (unit) per cm².
+    var isPour: Bool { isAdd && selectRaw == "pour" }
+    /// Chooses a chemistry batch: the glop for a tissue.
+    var choosesBatch: Bool { isSelect && selectRaw == "chemistry" }
+    var unitShown: String { unit ?? (isPigment ? "g" : "") }
 }
 
 /// What a "Select a material" step chooses, and the print layer field it fills.
@@ -77,6 +201,13 @@ struct Material: Identifiable, Equatable {
     let id: Int, label: String, sub: String?, archived: Bool
 
     init(id: Int, label: String, sub: String?) { self.id = id; self.label = label; self.sub = sub; archived = false }
+
+    /// One of the owner's own kinds: its name, then maker and notes.
+    init(generic j: JSON) {
+        id = j["id"].int ?? 0; archived = j["archived"].flag; label = j["label"].string ?? "#\(id)"
+        let s = [j["maker"].string, j["notes"].string].compactMap { $0 }.joined(separator: " · ")
+        sub = s.isEmpty ? nil : s
+    }
 
     init(what: SelectWhat, row j: JSON) {
         id = j["id"].int ?? 0; archived = j["archived"].flag
@@ -110,8 +241,18 @@ struct Paper: Identifiable, Equatable {
 
 struct Batch: Identifiable, Equatable {
     let id: Int, typeId: Int?, label: String, archived: Bool
+    /// Its own label ("1105-Ind.I"), its pigments, and "12 g India Ink + 4 g Carbon Black".
+    let ownLabel: String?, pigmentIds: [Int], pigmentsText: String?
     init(_ j: JSON) {
         id = j["id"].int ?? 0; typeId = j["type_id"].int; archived = j["archived"].flag
+        ownLabel = j["label"].string
+        let pg = j["pigments"].array
+        pigmentIds = pg.compactMap { $0["pigment_id"].int }
+        let t = pg.map { p -> String in
+            let amt = p["grams"].double.map { "\(Amount.format($0)) g " } ?? p["ml"].double.map { "\(Amount.format($0)) mL " } ?? ""
+            return amt + (p["pigment_name"].string ?? "")
+        }.joined(separator: " + ")
+        pigmentsText = t.isEmpty ? nil : t
         let type = j["type_name"].string ?? "Chemistry"
         label = j["label"].string.map { "\($0) (\(type))" } ?? "\(type) \(j["date_created"].string ?? "")"
     }
@@ -124,6 +265,11 @@ enum ExposureMethod: String, CaseIterable, Codable {
     }
 }
 
+enum Amount {
+    /// 100.000 → "100", 2.5 → "2.5".
+    static func format(_ v: Double) -> String { v.formatted(.number.precision(.fractionLength(0...3)).grouping(.never)) }
+}
+
 enum Clock {
     /// Local "YYYY-MM-DD HH:MM:SS", as the web page records step start times.
     static func stamp(_ d: Date = .now) -> String {
@@ -133,5 +279,32 @@ enum Clock {
     static func today(_ d: Date = .now) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.string(from: d)
+    }
+}
+
+/// Pour steps: the length and width typed on the day, and what they suggest.
+enum Pour {
+    /// Length × width, once both are there and above 0.
+    static func area(_ length: Double?, _ width: Double?) -> Double? {
+        guard let l = length, let w = width, l > 0, w > 0 else { return nil }
+        return l * w
+    }
+    /// The area times the rate, to a tenth.
+    static func amount(area: Double, rate: Double) -> Double { (area * rate * 10).rounded() / 10 }
+    /// "20 × 25 cm", else "500 cm²".
+    static func size(_ r: StepRecord) -> String? {
+        if let l = r.length, let w = r.width { return "\(Amount.format(l)) × \(Amount.format(w)) cm" }
+        return r.area.map { "\(Amount.format($0)) cm²" }
+    }
+}
+
+/// Checklist steps: items are kept one per line, on the step and on the record.
+enum Checklist {
+    static func lines(_ text: String?) -> [String] {
+        (text ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+    static func text(_ items: [String]?) -> String? {
+        guard let items, !items.isEmpty else { return nil }
+        return items.joined(separator: "\n")
     }
 }

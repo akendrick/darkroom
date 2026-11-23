@@ -14,8 +14,18 @@ records what you actually did so a good print can be repeated.
   silent (AlarmKit), show on the Lock Screen as a Live Activity, and appear on
   the Watch so you never touch the phone with wet hands.
 - **Darkroom mode.** Red on black, for use under the safelight.
-- **Processes.** Reference notes for each process, in sections, with a PDF to
-  print and pin on the darkroom wall.
+- **Processes.** The directions for each process, in stages (e.g. Glop, Print),
+  with their walk-throughs. Each stage keeps its revisions: edit a draft,
+  publish it with notes on what changed, look back at or return to an earlier
+  revision, and print any of them as a PDF to pin on the darkroom wall.
+- **Layers.** Gum and carbon prints built up in several passes: walk a finished
+  print again to add a layer. Each layer has its own walk-through, day, notes
+  and materials.
+- **Make walks.** Mix a batch of chemistry (e.g. carbon glop, with your own
+  pigment amounts), pour tissue from that batch, then print with that tissue.
+  Each gets its own ID, so a finished print traces back to the batch it came
+  from and the stage revision each was made with.
+- **Search.** Find prints by process, stage, revision, pigment or words.
 - **Multi-print.** Two prints side by side, the phone turned sideways.
 - **Works offline.** Everything is kept on the phone and sent when there is a
   connection.
