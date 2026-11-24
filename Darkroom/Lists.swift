@@ -467,6 +467,14 @@ struct RowForm: View {
     let saved: () async -> Void
     @State private var values: [String: JSON] = [:]
     @State private var options: [String: [JSON]] = [:]
+    /// What each score means, shown under its buttons: the 0-3 highlight key is fixed;
+    /// the 1-5 scores are read from the server's anchors (size_criterion) so editing them there changes the app.
+    @State private var scoreKey: [String: [String]] = {
+        let colour = ["0  clean paper white", "1  faint tint, only just visible", "2  noticeable tint", "3  strong stain or veil"]
+        return ["highlight_colour": colour, "rescore_highlight_colour": colour]
+    }()
+    private static let scoreCodes = ["score_display": ("support", "display"), "score_density": ("support", "density"),
+                                     "score_surface": ("support", "surface"), "curl_score": ("tissue", "curl")]
     /// The "Made from" rows, kept apart from values so typing in them keeps focus.
     @State private var links: [LinkRow] = []
     @State private var busy = false
@@ -562,6 +570,11 @@ struct RowForm: View {
                     }
                     Spacer()
                 }
+                if let lines = scoreKey[f.key] {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(lines, id: \.self) { Text($0).font(Theme.small).foregroundStyle(Theme.dim) }
+                    }
+                }
             }
         case .links:
             VStack(alignment: .leading, spacing: 6) {
@@ -602,8 +615,24 @@ struct RowForm: View {
                 for f in spec.fields where f.kind == .date && spec.required.contains(f.key) { values[f.key] = .string(fmt(.now, false)) }
             }
         }
+        let wanted = spec.fields.compactMap { Self.scoreCodes[$0.key] != nil ? $0.key : nil }
+        if !wanted.isEmpty, let crit = try? await store.list("size_criterion") {
+            for key in wanted {
+                guard let (subject, code) = Self.scoreCodes[key],
+                      let c = crit.first(where: { $0["subject"].string == subject && $0["code"].string == code }) else { continue }
+                scoreKey[key] = [("1", "anchor_1"), ("3", "anchor_3"), ("5", "anchor_5")]
+                    .compactMap { n, k in c[k].string.map { "\(n)  \($0)" } }
+            }
+        }
         for f in spec.fields {
-            if case .pick(let s) = f.kind, options[s] == nil { options[s] = (try? await store.list(s)) ?? [] }
+            if case .pick(let s) = f.kind, options[s] == nil {
+                do { options[s] = try await store.list(s) }
+                catch let e as ServerError {
+                    options[s] = []
+                    error = e.retry ? "Can't reach knotwork.ca — \(f.label) can't be chosen without a connection" : "\(f.label) list: \(e.message)"
+                }
+                catch { options[s] = []; self.error = "\(f.label) list: \(error.localizedDescription)" }
+            }
         }
     }
 
