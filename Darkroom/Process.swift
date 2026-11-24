@@ -352,10 +352,12 @@ struct ProcessesList: View {
 
 extension ProcessDoc {
     /// Carbon printing shows its sizing tests right after the stage that sizes
-    /// the final support (or after the last stage if none is named so).
+    /// the final support (a stage named for sizing, else for the support; else the last stage).
     var sizingTestsAfter: Int? {
         guard name.localizedCaseInsensitiveContains("carbon"), !sections.isEmpty else { return nil }
-        return sections.firstIndex { $0.title.localizedCaseInsensitiveContains("sizing") } ?? sections.count - 1
+        return sections.firstIndex { $0.title.localizedCaseInsensitiveContains("sizing") }
+            ?? sections.firstIndex { $0.title.localizedCaseInsensitiveContains("support") }
+            ?? sections.count - 1
     }
 }
 
