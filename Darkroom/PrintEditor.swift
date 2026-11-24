@@ -71,11 +71,11 @@ struct PrintEditor: View {
                     photo
                     Field(label: "Title") { TextField("", text: $title) }
                     Field(label: "Edition") {
-                        TextField("A or 2/10 — shown after the title", text: $edition)
+                        TextField(hint: "A or 2/10 — shown after the title", text: $edition)
                             .textInputAutocapitalization(.characters).autocorrectionDisabled()
                     }
                     Field(label: "Date exposed") {
-                        TextField("YYYY-MM-DD", text: $date).keyboardType(.numbersAndPunctuation)
+                        TextField(hint: "YYYY-MM-DD", text: $date).keyboardType(.numbersAndPunctuation)
                     }
                     stageField
                     Field(label: "Notes") { TextField("", text: $notes, axis: .vertical).lineLimit(2...6) }
@@ -85,7 +85,7 @@ struct PrintEditor: View {
                     ForEach(layers.indices, id: \.self) { i in
                         Text(layers.count > 1 ? "LAYER \(i + 1)" : "MATERIALS").font(Theme.label).foregroundStyle(Theme.bright)
                             .padding(.top, 6)
-                        Field(label: "Name") { TextField("Key, Cyan…", text: $layerNames[i]) }
+                        Field(label: "Name") { TextField(hint: "Key, Cyan…", text: $layerNames[i]) }
                         ForEach(SelectWhat.allCases, id: \.self) { what in
                             Field(label: what.noun.capitalized) {
                                 Picker(what.noun, selection: Binding(get: { layers[i][what.layerField] },
@@ -172,7 +172,7 @@ struct PrintEditor: View {
             }
             if !s.wrappedValue.skipped {
                 HStack(spacing: 10) {
-                    Field(label: "Time") { TextField("m:ss", text: s.time).keyboardType(.numbersAndPunctuation) }
+                    Field(label: "Time") { TextField(hint: "m:ss", text: s.time).keyboardType(.numbersAndPunctuation) }
                     Field(label: "°C") { TextField("", text: s.temp).keyboardType(.decimalPad) }
                 }
                 Field(label: "Note") { TextField("", text: s.note) }
@@ -194,9 +194,9 @@ struct PrintEditor: View {
                     }
                 }.pickerStyle(.menu).labelsHidden()
                 if let r = print["rev_label"].string, stage == print["rev_stage_id"].int {
-                    Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.dim)
+                    Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.subOnBox)
                 } else if stage != nil {
-                    Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.dim)
+                    Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.subOnBox)
                 }
             }
         }

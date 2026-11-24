@@ -14,7 +14,14 @@ struct SettingsView: View {
                     Toggle(isOn: $look.darkroom) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Darkroom mode").font(Theme.body.weight(.bold))
-                            Text("Red on black, safe under the safelight").font(Theme.small).foregroundStyle(.black.opacity(0.6))
+                            Text("Red on black, safe under the safelight").font(Theme.small).foregroundStyle(Theme.subOnBox)
+                        }
+                    }
+                    .tint(Theme.red)
+                    Toggle(isOn: $look.forWalks) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Darkroom mode for walk-throughs").font(Theme.body.weight(.bold))
+                            Text("On when one opens, off once the room lights can go on").font(Theme.small).foregroundStyle(Theme.subOnBox)
                         }
                     }
                     .tint(Theme.red)

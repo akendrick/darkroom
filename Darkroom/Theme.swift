@@ -5,14 +5,30 @@ import SwiftUI
 @MainActor @Observable
 final class Look {
     static let shared = Look()
-    private static let key = "darkroomMode"
-    var darkroom = UserDefaults.standard.bool(forKey: key) {
-        didSet { UserDefaults.standard.set(darkroom, forKey: Self.key) }
+    private static let key = "darkroomMode", autoKey = "darkroomForWalks"
+    /// The owner's own choice, from Settings.
+    var chosen = UserDefaults.standard.bool(forKey: key) {
+        didSet { UserDefaults.standard.set(chosen, forKey: Self.key) }
+    }
+    /// Walk-throughs switch darkroom mode on by themselves (on unless turned off).
+    var forWalks = UserDefaults.standard.object(forKey: autoKey) as? Bool ?? true {
+        didSet { UserDefaults.standard.set(forWalks, forKey: Self.autoKey); if !forWalks { walk = nil } }
+    }
+    /// What an open walk-through wants: dark until a step says the room
+    /// lights can go on, then light. nil when no walk is open.
+    var walk: Bool?
+
+    /// The look on screen: a walk's wish while one is open, else the choice.
+    /// Setting it (the Settings switch) is the owner taking over: it ends
+    /// the walk's say until the walk is opened again.
+    var darkroom: Bool {
+        get { (forWalks ? walk : nil) ?? chosen }
+        set { chosen = newValue; walk = nil }
     }
 }
 
 /// Two looks: everyday (dark ink on paper) and darkroom mode (red on black,
-/// safe under the safelight), switched in Settings.
+/// safe under the safelight), switched in Settings and by walk-throughs.
 @MainActor
 enum Theme {
     static var darkroom: Bool { Look.shared.darkroom }
@@ -20,24 +36,33 @@ enum Theme {
     /// The main colour: text, headings, outlines.
     static var red: Color { darkroom ? Color(red: 1, green: 0.165, blue: 0.102)       // #ff2a1a
                                      : Color(red: 0.75, green: 0.11, blue: 0.06) }    // #bf1c0f
-    static var dim: Color { darkroom ? red.opacity(0.55) : Color(red: 0.1, green: 0.1, blue: 0.08).opacity(0.6) }
+    static var dim: Color { darkroom ? Color(red: 0.85, green: 0.14, blue: 0.09) : Color(red: 0.1, green: 0.1, blue: 0.08).opacity(0.6) }
     static var line: Color { red.opacity(0.45) }
     /// A chosen item.
     static var fill: Color { darkroom ? Color(red: 0.23, green: 0.02, blue: 0) : Color(red: 0.98, green: 0.88, blue: 0.86) }
     /// Fields: black text on it.
-    static var box: Color { darkroom ? Color(red: 0.7, green: 0.1, blue: 0.05) : Color(red: 0.93, green: 0.91, blue: 0.89) }
+    static var box: Color { darkroom ? Color(red: 0.82, green: 0.12, blue: 0.06) : Color(red: 0.93, green: 0.91, blue: 0.89) }
     /// Field labels.
     static var bright: Color { darkroom ? Color(red: 1, green: 0.42, blue: 0.34) : Color(red: 0.45, green: 0.08, blue: 0.04) }
     /// Page background.
     static var bg: Color { darkroom ? .black : Color(red: 0.99, green: 0.98, blue: 0.97) }
+    /// Hint text inside a field (a TextField prompt), on `box`.
+    static var hint: Color { .black.opacity(darkroom ? 0.5 : 0.4) }
+    /// Sub text on `box` rows, under black titles.
+    static var subOnBox: Color { .black.opacity(darkroom ? 0.8 : 0.6) }
     /// Text on the big red buttons.
     static var onRed: Color { darkroom ? .black : .white }
+    /// Marks and accents drawn on a box (Field): red on the everyday grey box, black on the darkroom red one.
+    static var inkOnBox: Color { darkroom ? .black : red }
+    /// Text on a filled inkOnBox mark.
+    static var onInk: Color { darkroom ? red : .white }
 
     /// The walk dropdowns, darkest (the process) to lightest (a walk).
-    static var procBar: Color { darkroom ? Color(red: 0.16, green: 0.01, blue: 0) : Color(red: 0.36, green: 0.06, blue: 0.03) }
+    static var procBar: Color { darkroom ? Color(red: 0.12, green: 0.01, blue: 0) : Color(red: 0.36, green: 0.06, blue: 0.03) }
     static var procText: Color { darkroom ? red : .white }
-    static var stageBar: Color { darkroom ? Color(red: 0.4, green: 0.05, blue: 0.02) : red }
-    static var stageText: Color { darkroom ? bright : .white }
+    static var stageBar: Color { darkroom ? Color(red: 0.3, green: 0.035, blue: 0.015) : red }
+    /// Light red, not orange: orange on the red bar is hard to read under the safelight.
+    static var stageText: Color { darkroom ? Color(red: 1, green: 0.55, blue: 0.48) : .white }
     static var walkBar: Color { darkroom ? box : fill }
     static var walkOn: Color { darkroom ? red : Color(red: 0.93, green: 0.66, blue: 0.62) }
 
@@ -225,5 +250,12 @@ private struct HomeBulbItem: ViewModifier {
         content.toolbar {
             if let goHome { ToolbarItem(placement: .topBarLeading) { HomeBulb { goHome() } } }
         }
+    }
+}
+
+extension TextField where Label == Text {
+    /// A field whose hint stays readable on `Theme.box` in both looks.
+    @MainActor init(hint: String, text: Binding<String>, axis: Axis = .horizontal) {
+        self.init(text: text, prompt: Text(hint).foregroundStyle(Theme.hint), axis: axis) { Text(hint) }
     }
 }

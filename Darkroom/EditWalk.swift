@@ -294,7 +294,7 @@ struct PresetStepsView: View {
     var body: some View {
         List {
             Section {
-                TextField("Name", text: $edit.name).font(Theme.body.weight(.bold))
+                TextField(hint: "Name", text: $edit.name).font(Theme.body.weight(.bold))
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 Toggle("Default for this process", isOn: $edit.isDefault).font(Theme.small)
                     .listRowBackground(Theme.bg)
@@ -440,9 +440,10 @@ struct StepForm: View {
                         Button { pick(t) } label: {
                             Text(t.label).font(Theme.label.weight(.bold)).multilineTextAlignment(.center)
                                 .lineLimit(2).minimumScaleFactor(0.6)
-                                .foregroundStyle(type == t ? Theme.onRed : .black)
+                                .foregroundStyle(type == t ? Theme.onInk : .black)
                                 .frame(maxWidth: .infinity, minHeight: 54).padding(.horizontal, 2)
-                                .background(type == t ? Theme.red : Theme.box, in: .rect(cornerRadius: 8))
+                                .background(type == t ? Theme.inkOnBox : Theme.box, in: .rect(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(type == t ? Theme.red : .clear, lineWidth: 2))
                         }
                         .buttonStyle(.plain)
                     }
@@ -470,7 +471,7 @@ struct StepForm: View {
                 case .select: chooser(label: "Choose")
                 case .checklist:
                     Field(label: "Things to tick · one per line") {
-                        TextField("Level the pouring surface\nRoom above 14 °C", text: $step.checklist, axis: .vertical).lineLimit(4...14)
+                        TextField(hint: "Level the pouring surface\nRoom above 14 °C", text: $step.checklist, axis: .vertical).lineLimit(4...14)
                     }
                     Text("Next works with none ticked. The ticked ones are kept with what was made.")
                         .font(Theme.small).foregroundStyle(Theme.dim)
@@ -528,7 +529,7 @@ struct StepForm: View {
     @ViewBuilder private var addFields: some View {
         HStack(spacing: 10) {
             Field(label: "Amount") { NumberField(value: $step.defaultAmount) }
-            Field(label: "Unit") { TextField("g, mL…", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
+            Field(label: "Unit") { TextField(hint: "g, mL…", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
         }
         chemistry
         Field(label: "Pigment") {
@@ -547,7 +548,7 @@ struct StepForm: View {
         let unit = (step.unit ?? "").isEmpty ? "mL" : step.unit!
         HStack(spacing: 10) {
             Field(label: "\(unit) per cm²") { NumberField(value: $step.defaultAmount) }
-            Field(label: "Unit") { TextField("mL", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
+            Field(label: "Unit") { TextField(hint: "mL", text: Binding(get: { step.unit ?? "" }, set: { step.unit = String($0.prefix(12)) })) }
         }
         Text(step.defaultAmount.map { r in
             "1 cm² gets \(Amount.format(r)) \(unit); a 20 × 25 cm pour (500 cm²) gets \(Amount.format(Pour.amount(area: 500, rate: r))) \(unit)."
@@ -674,7 +675,7 @@ struct NumberField: View {
     @State private var text = ""
 
     var body: some View {
-        TextField("—", text: $text)
+        TextField(hint: "—", text: $text)
             .keyboardType(whole ? .numberPad : .decimalPad)
             .onAppear { text = value.map { whole ? String(Int($0)) : $0.formatted() } ?? "" }
             .onChange(of: text) { _, t in value = Double(t.replacingOccurrences(of: ",", with: ".")) }
@@ -682,5 +683,31 @@ struct NumberField: View {
             .onChange(of: value) { _, v in
                 if Double(text.replacingOccurrences(of: ",", with: ".")) != v { text = v.map { whole ? String(Int($0)) : $0.formatted() } ?? "" }
             }
+    }
+}
+
+/// A time typed as 2, 90s, 1:30 and kept in whole seconds; shows what it understood.
+struct DurationField: View {
+    @Binding var seconds: Int?
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            TextField(hint: "—", text: $text)
+                .keyboardType(.numbersAndPunctuation)
+                .onAppear { text = seconds.map(Duration.format) ?? "" }
+                .onChange(of: text) { _, t in
+                    switch Duration.parse(t) {
+                    case .empty: seconds = nil
+                    case .seconds(let s): seconds = s
+                    case .invalid: break
+                    }
+                }
+            switch Duration.parse(text) {
+            case .invalid: Text("not a time").font(Theme.small).foregroundStyle(Theme.red)
+            case .seconds(let s) where text != Duration.format(s): Text("= \(Duration.format(s))").font(Theme.small).foregroundStyle(Theme.dim)
+            default: EmptyView()
+            }
+        }
     }
 }

@@ -14,6 +14,13 @@ struct DarkroomApp: App {
         _walks = State(initialValue: Walks(store: s))
         PhoneWatch.shared.activate()
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        // Bar titles: darkroom mode is the dark colour scheme, so a trait colour
+        // keeps them red there (never white under the safelight) and follows
+        // every switch without rebuilding the bars.
+        let title = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.165, blue: 0.102, alpha: 1) : .label }
+        UINavigationBar.appearance().titleTextAttributes = [.foregroundColor: title]
+        UINavigationBar.appearance().largeTitleTextAttributes = [.foregroundColor: title]
+        UINavigationBar.appearance().tintColor = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.165, blue: 0.102, alpha: 1) : UIColor(red: 0.75, green: 0.11, blue: 0.06, alpha: 1) }
     }
 
     var body: some Scene {
@@ -22,6 +29,9 @@ struct DarkroomApp: App {
                 .environment(store)
                 .environment(walks)
                 .preferredColorScheme(Look.shared.darkroom ? .dark : .light)
+                .tint(Theme.red)
+                // Text with no colour of its own is red in darkroom mode, never white.
+                .foregroundStyle(Look.shared.darkroom ? Theme.red : Color.primary)
                 .task {
                     _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
                     await StepAlarm.shared.authorize()

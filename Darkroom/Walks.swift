@@ -162,9 +162,13 @@ struct WalkHost: View {
             }
         }
         .background(Theme.bg.ignoresSafeArea())
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }       // screen stays on
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onAppear { UIApplication.shared.isIdleTimerDisabled = true; Look.shared.walk = dark }  // screen stays on
+        .onChange(of: dark) { _, d in Look.shared.walk = d }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false; Look.shared.walk = nil }
     }
+
+    /// Darkroom mode while any open print is still in the dark.
+    private var dark: Bool { [walks.left, walks.right].contains { $0.map { !$0.lightsOn } ?? false } }
 
     /// A walk-through drawn a little smaller to fit half the screen, or the
     /// start page when that half is free.

@@ -14,7 +14,8 @@ struct WalkView: View {
         VStack(spacing: 0) {
             topBar
             ScrollView {
-                Group {
+                VStack(alignment: .leading, spacing: 0) {
+                    if model.lightsJustOn { LightsOnBanner() }
                     switch model.page {
                     case .start: StartPage(model: model)
                     case .finish: FinishPage(model: model)
@@ -106,7 +107,7 @@ struct StartPage: View {
             }
             if !model.draft.isMake && model.draft.layer == 1 {
                 Field(label: "Title") {
-                    TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title)
+                    TextField(hint: model.draft.defaultTitle(model.snap), text: $model.draft.title)
                 }
             }
         }
@@ -237,7 +238,7 @@ struct NewKindMaterialForm: View {
     var body: some View {
         VStack(spacing: 10) {
             Field(label: "Name") { TextField("", text: $name) }
-            Field(label: "Maker") { TextField("optional", text: $maker) }
+            Field(label: "Maker") { TextField(hint: "optional", text: $maker) }
             Button("Add & choose") {
                 let n = name.trimmingCharacters(in: .whitespaces)
                 guard !n.isEmpty else { model.status = "Type a name first"; return }
@@ -490,6 +491,23 @@ struct ImportantBanner: View {
     }
 }
 
+/// Shown once the step after which the room lights can go on is done; the
+/// screen leaves darkroom mode with it.
+struct LightsOnBanner: View {
+    @State private var shown = false
+    var body: some View {
+        Label("SAFE TO TURN THE LIGHTS ON", systemImage: "lightbulb.max.fill")
+            .font(Theme.display(28)).tracking(1)
+            .foregroundStyle(Theme.onRed).lineLimit(1).minimumScaleFactor(0.6).padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(Theme.red, in: .rect(cornerRadius: 12))
+            .padding(.bottom, 12)
+            .onAppear { shown = true }
+            .sensoryFeedback(.success, trigger: shown)
+            .accessibilityLabel("Safe to turn the lights on")
+    }
+}
+
 struct StepPage: View {
     @Bindable var model: WalkModel
     let step: Step
@@ -601,7 +619,7 @@ struct StepPage: View {
                 if newMaterial { NewMaterialForm(model: model, what: what) { newMaterial = false } }
             }
             Field(label: "Note") {
-                TextField("optional", text: Binding(get: { model.rec.notes ?? "" },
+                TextField(hint: "optional", text: Binding(get: { model.rec.notes ?? "" },
                                                     set: { model.rec.notes = $0.isEmpty ? nil : $0 }))
             }
             if step.lightsOkAfter { Text("Room lights can go on after this step").font(Theme.small) }
@@ -696,16 +714,16 @@ struct RunFinishPage: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             HStack(spacing: 10) {
-                Field(label: chem ? "Made" : "Poured") { TextField("YYYY-MM-DD", text: $model.draft.date).keyboardType(.numbersAndPunctuation) }
+                Field(label: chem ? "Made" : "Poured") { TextField(hint: "YYYY-MM-DD", text: $model.draft.date).keyboardType(.numbersAndPunctuation) }
                 if chem { Field(label: "Volume mL") { NumberField(value: $model.draft.volume) } }
-                else { Field(label: "Size") { TextField("16x26", text: Binding(get: { model.draft.size ?? model.draft.pourArea(model.snap) ?? "" }, set: { model.draft.size = $0 })) } }
+                else { Field(label: "Size") { TextField(hint: "16x26", text: Binding(get: { model.draft.size ?? model.draft.pourArea(model.snap) ?? "" }, set: { model.draft.size = $0 })) } }
             }
             if !chem {
                 Field(label: "Amount poured") {
                     TextField("", text: Binding(get: { model.draft.amountPoured ?? model.draft.poured(model.snap) ?? "" }, set: { model.draft.amountPoured = $0 }))
                 }
             }
-            Field(label: "Notes") { TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6) }
+            Field(label: "Notes") { TextField(hint: "How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6) }
             Text("Finish saves it to \(chem ? "Chemistry" : "Materials → Carbon tissue"), ready to choose in the next walk-through. The recipe stays as it is.")
                 .font(Theme.small).foregroundStyle(Theme.dim)
         }
@@ -749,14 +767,14 @@ struct FinishPage: View {
                     .font(Theme.small)
                 }
             }
-            Field(label: "Title") { TextField(model.draft.defaultTitle(model.snap), text: $model.draft.title) }
+            Field(label: "Title") { TextField(hint: model.draft.defaultTitle(model.snap), text: $model.draft.title) }
             Field(label: "Edition") {
-                TextField("A or 2/10 — shown after the title", text: Binding(get: { model.draft.edition ?? "" },
+                TextField(hint: "A or 2/10 — shown after the title", text: Binding(get: { model.draft.edition ?? "" },
                                                                            set: { model.draft.edition = String($0.prefix(20)) }))
                     .textInputAutocapitalization(.characters).autocorrectionDisabled()
             }
             Field(label: model.draft.layer > 1 ? "Notes on this layer" : "Notes") {
-                TextField("How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6)
+                TextField(hint: "How did it go?", text: $model.draft.notes, axis: .vertical).lineLimit(3...6)
             }
             Note(text: "Once it's finished, Add a layer on the print walks it again for layer \(model.draft.layer + 1).")
         }

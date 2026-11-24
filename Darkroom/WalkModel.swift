@@ -55,6 +55,11 @@ final class WalkModel {
     var pages: [WalkPage] { draft.pages(preset) }
     var page: WalkPage { pages[min(draft.page, pages.count - 1)] }
     var stepPages: [WalkPage] { pages.filter { $0.step != nil } }
+    /// Past a step after which the room lights can go on (going Back before
+    /// it makes the room dark again).
+    var lightsOn: Bool { pages.prefix(draft.page).contains { $0.step?.lightsOkAfter == true } }
+    /// The page straight after that step: where it says so.
+    var lightsJustOn: Bool { draft.page > 0 && pages[min(draft.page - 1, pages.count - 1)].step?.lightsOkAfter == true }
     /// "L2" on a print's second layer and after.
     var layerTag: String? { !draft.isMake && draft.layer > 1 ? "L\(draft.layer)" : nil }
 

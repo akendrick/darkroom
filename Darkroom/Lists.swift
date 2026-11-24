@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// The lists behind the walk-through, edited on the phone: chemistry,
 /// tissues, papers, negatives and the names they're sorted by. Each one is
@@ -8,7 +9,13 @@ struct ListSpec: Identifiable, Hashable {
     /// stage: the Stage a batch or tissue was made from (its current revision is recorded).
     enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links, stage
         /// A fixed set of words (Matte / Glossy). rating: a score from lo to hi, one tap, tap again to clear.
-        case choice([String]), rating(Int, Int) }
+        case choice([String]), rating(Int, Int)
+        /// A time typed as 2, 90s, 1:30 and kept in seconds (same rules as the web page).
+        case duration
+        /// 0-100 % on a slider (whole numbers); untouched means not recorded, and Clear puts it back.
+        case percent
+        /// The test's photos (main photo and others); needs the row to be saved first.
+        case photos }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -69,12 +76,12 @@ struct ListSpec: Identifiable, Hashable {
         ListSpec(id: "size_test", title: "Sizing tests", fields: [
             .init(key: "lane_id", label: "Lane", kind: .pick("size_lane")),
             .init(key: "support_paper_id", label: "Sample sheet", kind: .pick("support_paper")),
-            .init(key: "retention_pct", label: "Image retention %", kind: .number),
+            .init(key: "retention_pct", label: "Image retention %", kind: .percent),
             .init(key: "frilling", label: "Frilling / lifting", kind: .choice(["None", "Minor", "Moderate", "Failed"])),
-            .init(key: "highlight_colour", label: "Highlight colour 0-3", kind: .rating(0, 3)),
+            .init(key: "highlight_colour", label: "Staining 0-3", kind: .rating(0, 3)),
             .init(key: "score_display", label: "Image display 1-5", kind: .rating(1, 5)),
             .init(key: "score_density", label: "Density 1-5", kind: .rating(1, 5)),
-            .init(key: "score_surface", label: "Surface 1-5", kind: .rating(1, 5)),
+            .init(key: "score_surface", label: "Surface texture 0-5", kind: .rating(0, 5)),
             .init(key: "gloss", label: "Gloss", kind: .choice(["Matte", "Satin", "Gloss"])),
             .init(key: "measured_display", label: "Steps visible (optional)", kind: .number),
             .init(key: "carbon_tissue_id", label: "Tissue used", kind: .pick("carbon_tissue")),
@@ -83,15 +90,21 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "actual_dose", label: "Actual mix / dose used", kind: .text),
             .init(key: "cure_start", label: "Cure start", kind: .date),
             .init(key: "printed_on", label: "Print date", kind: .date),
+            .init(key: "presoak_seconds", label: "Pre-soak, support alone (e.g. 2 or 90s)", kind: .duration),
+            .init(key: "mating_seconds", label: "Mating soak, support + tissue (e.g. 45s)", kind: .duration),
+            .init(key: "water_temp_c", label: "Water temperature °C", kind: .number),
             .init(key: "rescored_on", label: "Re-scored on", kind: .date),
-            .init(key: "rescore_retention_pct", label: "Re-score retention %", kind: .number),
-            .init(key: "rescore_highlight_colour", label: "Re-score colour 0-3", kind: .rating(0, 3)),
+            .init(key: "rescore_retention_pct", label: "Re-score retention %", kind: .percent),
+            .init(key: "rescore_highlight_colour", label: "Re-score staining 0-3", kind: .rating(0, 3)),
+            .init(key: "photos", label: "Photos (first is the main photo)", kind: .photos),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["lane_id", "support_paper_id"], archives: false,
            rowTitle: { [$0["code"].string, $0["lane"].string].compactMap { $0 }.joined(separator: " ") },
            rowSub: { j in
                [j["weighted_score"].double.map { "score \(Amount.format($0))" }, j["result"].string,
-                j["retention_pct"].double.map { "\(Amount.format($0))% kept" }].compactMap { $0 }.joined(separator: " · ") }),
+                j["retention_pct"].double.map { "\(Amount.format($0))% kept" },
+                j["presoak_seconds"].int.map { "pre \(Duration.format($0))" }, j["mating_seconds"].int.map { "mating \(Duration.format($0))" },
+                j["water_temp_c"].double.map { "\(Amount.format($0)) °C" }].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "paper", title: "Papers", fields: [
             .init(key: "manufacturer", label: "Maker", kind: .text),
             .init(key: "label", label: "Name", kind: .text),
@@ -276,7 +289,7 @@ struct RowsView: View {
                 Button { editing = r } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(spec.rowTitle(r)).font(Theme.body.weight(.bold))
-                        if let s = model.sub(r) { Text(s).font(Theme.small).opacity(0.7) }
+                        if let s = model.sub(r) { Text(s).font(Theme.small).foregroundStyle(Theme.subOnBox) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(model.isHidden(r) ? 0.5 : 1)
@@ -471,10 +484,11 @@ struct RowForm: View {
     /// the 1-5 scores are read from the server's anchors (size_criterion) so editing them there changes the app.
     @State private var scoreKey: [String: [String]] = {
         let colour = ["0  clean paper white", "1  faint tint, only just visible", "2  noticeable tint", "3  strong stain or veil"]
-        return ["highlight_colour": colour, "rescore_highlight_colour": colour]
+        return ["highlight_colour": colour, "rescore_highlight_colour": colour,
+                "score_surface": ["0  smooth", "5  highly textured"]]
     }()
     private static let scoreCodes = ["score_display": ("support", "display"), "score_density": ("support", "density"),
-                                     "score_surface": ("support", "surface"), "curl_score": ("tissue", "curl")]
+                                     "curl_score": ("tissue", "curl")]
     /// The "Made from" rows, kept apart from values so typing in them keeps focus.
     @State private var links: [LinkRow] = []
     @State private var busy = false
@@ -556,6 +570,28 @@ struct RowForm: View {
                     ForEach(words, id: \.self) { w in Text(w).tag(String?.some(w)) }
                 }.pickerStyle(.menu).labelsHidden()
             }
+        case .photos:
+            if let id = row?["id"].int {
+                Field(label: f.label) { SizeTestPhotos(testId: id) }
+            } else {
+                Field(label: f.label) { Text("Save the test first, then add photos.").font(Theme.small).foregroundStyle(Theme.subOnBox) }
+            }
+        case .percent:
+            Field(label: f.label) {
+                HStack(spacing: 12) {
+                    Slider(value: Binding(get: { values[f.key]?.double ?? 0 }, set: { values[f.key] = .from($0.rounded()) }), in: 0...100, step: 1)
+                        .tint(Theme.inkOnBox)
+                    Text(values[f.key]?.double.map { "\(Int($0))%" } ?? "—").font(Theme.body.weight(.bold)).foregroundStyle(Theme.inkOnBox)
+                        .frame(width: 56, alignment: .trailing)
+                    if values[f.key]?.double != nil {
+                        Button("Clear") { values[f.key] = .null }.font(Theme.small.weight(.bold)).buttonStyle(.plain).foregroundStyle(Theme.subOnBox)
+                    }
+                }
+            }
+        case .duration:
+            Field(label: f.label) {
+                DurationField(seconds: Binding(get: { values[f.key]?.int }, set: { values[f.key] = .from($0) }))
+            }
         case .rating(let lo, let hi):
             Field(label: f.label) {
                 HStack(spacing: 8) {
@@ -563,16 +599,16 @@ struct RowForm: View {
                         let on = values[f.key]?.int == n
                         Button { values[f.key] = on ? .null : .from(n) } label: {
                             Text("\(n)").font(Theme.body.weight(.bold)).frame(width: 42, height: 42)
-                                .foregroundStyle(on ? Theme.onRed : Theme.red)
-                                .background(on ? Theme.red : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.red, lineWidth: 1.5))
+                                .foregroundStyle(on ? Theme.onInk : Theme.inkOnBox)
+                                .background(on ? Theme.inkOnBox : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.inkOnBox, lineWidth: 1.5))
                         }.buttonStyle(.plain)
                     }
                     Spacer()
                 }
                 if let lines = scoreKey[f.key] {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(lines, id: \.self) { Text($0).font(Theme.small).foregroundStyle(Theme.dim) }
+                        ForEach(lines, id: \.self) { Text($0).font(Theme.small).foregroundStyle(Theme.subOnBox) }
                     }
                 }
             }
@@ -593,9 +629,9 @@ struct RowForm: View {
                         }
                     }.pickerStyle(.menu).labelsHidden()
                     if let r = row?["rev_label"].string, values[f.key]?.int == originalStage {
-                        Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.dim)
+                        Text("Made from \(r)").font(Theme.small).foregroundStyle(Theme.subOnBox)
                     } else if values[f.key]?.int != nil {
-                        Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.dim)
+                        Text("Records the stage's current revision").font(Theme.small).foregroundStyle(Theme.subOnBox)
                     }
                 }
             }
@@ -608,7 +644,7 @@ struct RowForm: View {
 
     private func setUp() async {
         if values.isEmpty {
-            for f in spec.fields where f.kind != .links { values[f.key] = row?[f.key] ?? .null }
+            for f in spec.fields where f.kind != .links && f.kind != .photos { values[f.key] = row?[f.key] ?? .null }
             if spec.fields.contains(where: { $0.kind == .stage }) { originalStage = row?["rev_stage_id"].int; values["stage_id"] = .from(originalStage) }
             links = (row?["links"].array ?? []).map(LinkRow.init(link:))
             if row == nil {     // a new one is made today
@@ -666,4 +702,112 @@ struct RowForm: View {
         return f.date(from: time ? s : String(s.prefix(10)))
     }
     private func fmt(_ d: Date, _ time: Bool) -> String { time ? Clock.stamp(d) : Clock.today(d) }
+}
+
+
+/// A sizing test's photos: the main one first, then the others. Tap to view large; press and hold to
+/// caption, make main or remove. Photos go straight to knotwork.ca, so these need a connection.
+struct SizeTestPhotos: View {
+    let testId: Int
+    @Environment(AppStore.self) private var store
+    @State private var images: [JSON] = []
+    @State private var note: String?
+    @State private var busy = false
+    @State private var camera = false
+    @State private var showLibrary = false
+    @State private var library: PhotosPickerItem?
+    @State private var viewing: JSON?
+    @State private var captioning: JSON?
+    @State private var caption = ""
+    @State private var removing: JSON?
+
+    private func url(_ path: String?) -> URL? { path.flatMap { URL(string: $0, relativeTo: store.server.base) } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 8)], spacing: 8) {
+                ForEach(Array(images.enumerated()), id: \.offset) { _, i in
+                    VStack(spacing: 2) {
+                        Color.clear.aspectRatio(1, contentMode: .fit)
+                            .overlay { AsyncImage(url: url(i["thumb_path"].string ?? i["image_path"].string)) { $0.resizable().scaledToFill() } placeholder: { Theme.box } }
+                            .clipShape(.rect(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(i["is_main"].flag ? Theme.inkOnBox : .clear, lineWidth: 2))
+                            .onTapGesture { viewing = i }
+                            .contextMenu {
+                                if !i["is_main"].flag { Button("Make main photo", systemImage: "star") { Task { await change(i, ["is_main": 1]) } } }
+                                Button("Caption", systemImage: "text.bubble") { caption = i["caption"].string ?? ""; captioning = i }
+                                Button("Remove", systemImage: "trash", role: .destructive) { removing = i }
+                            }
+                        if let c = i["caption"].string { Text(c).font(.caption2).foregroundStyle(Theme.subOnBox).lineLimit(1) }
+                    }
+                }
+                Menu {
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) { Button("Take Photo", systemImage: "camera") { camera = true } }
+                    Button("Photo Library", systemImage: "photo") { showLibrary = true }
+                } label: {
+                    Color.clear.aspectRatio(1, contentMode: .fit)
+                        .overlay { if busy { ProgressView().tint(Theme.inkOnBox) } else { Image(systemName: "plus").font(.title3) } }
+                        .foregroundStyle(Theme.inkOnBox)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.inkOnBox.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                }
+                .disabled(busy)
+                .accessibilityLabel(images.isEmpty ? "Add the main photo" : "Add another photo")
+            }
+            if let note { Text(note).font(Theme.small).foregroundStyle(Theme.inkOnBox) }
+        }
+        .task { await reload() }
+        .photosPicker(isPresented: $showLibrary, selection: $library, matching: .images)
+        .onChange(of: library) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) { await add(img) }
+                library = nil
+            }
+        }
+        .fullScreenCover(isPresented: $camera) {
+            CameraView(note: { note = $0 }) { img in camera = false; if let img { Task { await add(img) } } }.ignoresSafeArea()
+        }
+        .fullScreenCover(item: Binding(get: { viewing.map { Wrapped(row: $0) } }, set: { viewing = $0?.row })) { w in
+            ZStack {
+                Color.black.ignoresSafeArea()
+                AsyncImage(url: url(w.row["image_path"].string)) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
+            }
+            .onTapGesture { viewing = nil }
+        }
+        .alert("Caption", isPresented: Binding(get: { captioning != nil }, set: { if !$0 { captioning = nil } })) {
+            TextField("What this photo shows", text: $caption)
+            Button("Save") { if let c = captioning { Task { await change(c, ["caption": .from(caption.isEmpty ? nil : caption)]) } } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Remove this photo?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { i in
+            Button("Remove", role: .destructive) { Task { await remove(i) } }
+            Button("Keep it", role: .cancel) {}
+        } message: { _ in Text("It's deleted from knotwork.ca.") }
+    }
+
+    private func reload() async {
+        do { images = try await store.list("size_test_image&id=\(testId)"); note = nil }
+        catch let e as ServerError { note = e.retry ? "Can't reach knotwork.ca — photos need a connection" : e.message }
+        catch { self.note = error.localizedDescription }
+    }
+    private func call(_ what: String, _ run: () async throws -> Void) async {
+        busy = true; defer { busy = false }
+        do { try await run(); note = nil; await reload() }
+        catch let e as ServerError { note = e.retry ? "Can't reach knotwork.ca — \(what) didn't happen" : e.message }
+        catch { note = error.localizedDescription }
+    }
+    /// The first photo of a test is its main photo; the rest are added alongside it.
+    private func add(_ img: UIImage) async {
+        guard let jpeg = img.shrunk(to: 1800).jpegData(compressionQuality: 0.9) else { return }
+        await call("the photo upload") { _ = try await store.server.upload(jpeg: jpeg, photoId: testId, detail: !images.isEmpty, res: "size_test_image") }
+    }
+    private func change(_ i: JSON, _ body: [String: JSON]) async {
+        guard let iid = i["id"].int else { return }
+        await call("the change") { _ = try await store.server.request("darkroom-api.php?res=size_test_image&id=\(testId)&image=\(iid)", method: "PATCH", body: .object(body)) }
+    }
+    private func remove(_ i: JSON) async {
+        guard let iid = i["id"].int else { return }
+        await call("the removal") { _ = try await store.server.request("darkroom-api.php?res=size_test_image&id=\(testId)&image=\(iid)", method: "DELETE") }
+    }
 }

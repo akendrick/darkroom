@@ -224,7 +224,7 @@ struct ProcessesList: View {
             unfiled
             if adding {
                 HStack(spacing: 10) {
-                    TextField("Name of the new process", text: $newName)
+                    TextField(hint: "Name of the new process", text: $newName)
                         .font(Theme.body.weight(.bold)).foregroundStyle(.black)
                         .padding(12).background(Theme.box, in: .rect(cornerRadius: 8))
                         .submitLabel(.done).onSubmit(add)
@@ -1245,14 +1245,14 @@ struct ProcessEditor: View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    TextField("Name", text: $edit.doc.name).font(Theme.body.weight(.bold))
+                    TextField(hint: "Name", text: $edit.doc.name).font(Theme.body.weight(.bold))
                         .listRowBackground(Theme.box).foregroundStyle(.black)
                     Picker("Kind of print", selection: $edit.doc.photoTypeId) {
                         Text("—").tag(Int?.none)
                         ForEach(store.snapshot?.photoTypes ?? []) { Text($0.name).tag(Optional($0.id)) }
                     }
                     .font(Theme.small).listRowBackground(Theme.bg)
-                    TextField("Summary", text: $edit.doc.summary, axis: .vertical).lineLimit(2...6).font(Theme.small)
+                    TextField(hint: "Summary", text: $edit.doc.summary, axis: .vertical).lineLimit(2...6).font(Theme.small)
                         .listRowBackground(Theme.box).foregroundStyle(.black)
                 }
                 Section {
@@ -1371,14 +1371,14 @@ private struct SectionForm: View {
     var body: some View {
         List {
             Section {
-                TextField("Title", text: $section.title).font(Theme.body.weight(.bold))
+                TextField(hint: "Title", text: $section.title).font(Theme.body.weight(.bold))
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 Picker("Optional next step", selection: $section.nextKey) {
                     Text("None").tag(String?.none)
                     ForEach(edit.doc.sections.filter { $0.key != key && ($0.presetId != nil || edit.hasWalk($0.key)) }) { Text($0.title).tag(Optional($0.key)) }
                 }
                 .font(Theme.small).listRowBackground(Theme.bg)
-                TextField("Introduction", text: $section.intro, axis: .vertical).lineLimit(2...8).font(Theme.small)
+                TextField(hint: "Introduction", text: $section.intro, axis: .vertical).lineLimit(2...8).font(Theme.small)
                     .listRowBackground(Theme.box).foregroundStyle(.black)
             }
             Section {
@@ -1387,9 +1387,9 @@ private struct SectionForm: View {
                         HStack {
                             Picker("Kind", selection: $b.kind) { ForEach(ProcBox.kinds, id: \.0) { Text($0.1).tag($0.0) } }
                                 .labelsHidden().pickerStyle(.menu)
-                            TextField("Title", text: $b.title).font(Theme.body.weight(.bold))
+                            TextField(hint: "Title", text: $b.title).font(Theme.body.weight(.bold))
                         }
-                        TextField("One item per line", text: $b.body, axis: .vertical).lineLimit(2...10).font(Theme.small)
+                        TextField(hint: "One item per line", text: $b.body, axis: .vertical).lineLimit(2...10).font(Theme.small)
                     }
                     .listRowBackground(Theme.box).foregroundStyle(.black)
                 }
@@ -1514,7 +1514,7 @@ private struct SectionForm: View {
                     .disabled(!w.readable)
                     .accessibilityLabel("Show the steps of \(w.name)")
                     VStack(alignment: .leading, spacing: 2) {
-                        TextField("Walk name", text: Binding(get: { w.name }, set: { edit.renameWalk(key, w.id, $0) }))
+                        TextField(hint: "Walk name", text: Binding(get: { w.name }, set: { edit.renameWalk(key, w.id, $0) }))
                             .font(Theme.body.weight(.bold))
                         Text([w.chemistryTypeId.flatMap { store.snapshot?.chemistryTypeName($0) }.map { "makes \($0)" } ?? w.what, "\(w.steps.count) steps", w.serverId == nil ? "new" : nil, w.readable ? nil : "steps not loaded"]
                             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))

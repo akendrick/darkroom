@@ -249,7 +249,7 @@ struct PublishSheet: View {
                     else { ProgressView().tint(Theme.red) }
                     ForEach(Array(changes.enumerated()), id: \.offset) { _, c in ChangeLine(change: c) }
                     Field(label: "Your comments (optional)") {
-                        TextField("Why it changed, what to watch for", text: $comments, axis: .vertical).lineLimit(2...8)
+                        TextField(hint: "Why it changed, what to watch for", text: $comments, axis: .vertical).lineLimit(2...8)
                     }
                     if let error { Text(error).font(Theme.small).bold() }
                 }
@@ -519,7 +519,7 @@ struct RevisionBody: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.walkBar, in: .rect(cornerRadius: 8))
-                .foregroundStyle(Theme.darkroom ? Theme.red : .black)
+                .foregroundStyle(.black)
             }
         }
     }
@@ -581,11 +581,12 @@ struct PrintSearchBar: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "magnifyingglass")
-                TextField("Title, edition or notes", text: $words)
+                TextField(hint: "Title, edition or notes", text: $words)
                     .submitLabel(.search).onSubmit { filter.words = words }
                     .foregroundStyle(.black)
                 if !words.isEmpty { Button { words = ""; filter.words = "" } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Clear words") }
             }
+            .foregroundStyle(Theme.inkOnBox).tint(Theme.inkOnBox)
             .padding(10).background(Theme.box, in: .rect(cornerRadius: 8))
             ChipFlow {
                 menu(options?.process(filter.processId)?["name"].string ?? "Any process", on: filter.processId != nil) {

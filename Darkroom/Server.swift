@@ -81,9 +81,9 @@ struct Server {
 
     /// The API's photo upload (multipart, field "image"): the print's main
     /// photo, or with `detail` one more photo of it.
-    func upload(jpeg: Data, photoId: Int, detail: Bool = false) async throws -> JSON {
+    func upload(jpeg: Data, photoId: Int, detail: Bool = false, res: String = "photo_image") async throws -> JSON {
         let boundary = "kw-\(UUID().uuidString)"
-        var r = URLRequest(url: URL(string: "darkroom-api.php?res=photo_image&id=\(photoId)" + (detail ? "&detail=1" : ""), relativeTo: base)!)
+        var r = URLRequest(url: URL(string: "darkroom-api.php?res=\(res)&id=\(photoId)" + (detail ? "&detail=1" : ""), relativeTo: base)!)
         r.httpMethod = "POST"
         r.timeoutInterval = 120
         if let key { r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
