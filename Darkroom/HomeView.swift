@@ -195,7 +195,7 @@ struct HomeView: View {
             InlineRows(spec: .of("chemistry"), adding: $addingBatch).padding(.leading, 8)
         default:
             lists((store.snapshot?.materialKinds ?? []).map(ListSpec.materials)
-                  + ["paper", "support_paper", "carbon_tissue", "size_test", "negative", "pigment", "negative_types"].map(ListSpec.of)
+                  + ["paper", "support_paper", "carbon_tissue", "negative", "pigment", "negative_types"].map(ListSpec.of)
                   + [.materialKinds])
         }
     }

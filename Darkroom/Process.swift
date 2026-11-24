@@ -217,6 +217,17 @@ struct ProcessesList: View {
                         ForEach(Array(p.sections.enumerated()), id: \.element.key) { i, s in
                             stage(s, in: p, at: i)
                         }
+                        // Sizing tests belong to carbon printing: the support papers they test are for this process.
+                        if p.name.localizedCaseInsensitiveContains("carbon") {
+                            NavigationLink(value: ListSpec.of("size_test")) {
+                                HStack {
+                                    Label("Sizing tests", systemImage: "square.grid.3x3")
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                }
+                            }
+                            .buttonStyle(TreeRowStyle(fill: Theme.stageBar, text: Theme.stageText))
+                        }
                     }
                     .padding(.leading, 12)
                 }

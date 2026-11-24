@@ -29,6 +29,8 @@ struct ListSpec: Identifiable, Hashable {
     var fixed: [String: JSON] = [:]
     /// The list's own query, when it's part of a resource ("material&kind_id=3").
     var listRes: String? = nil
+    /// A small picture for the row (a sizing test's main photo): a path on knotwork.ca.
+    var rowImage: ((JSON) -> String?)? = nil
 
     /// The API resource: the id up to any ":" ("material:3" → material).
     var resource: String { String(id.split(separator: ":").first ?? "") }
@@ -104,7 +106,9 @@ struct ListSpec: Identifiable, Hashable {
                [j["weighted_score"].double.map { "score \(Amount.format($0))" }, j["result"].string,
                 j["retention_pct"].double.map { "\(Amount.format($0))% kept" },
                 j["presoak_seconds"].int.map { "pre \(Duration.format($0))" }, j["mating_seconds"].int.map { "mating \(Duration.format($0))" },
-                j["water_temp_c"].double.map { "\(Amount.format($0)) °C" }].compactMap { $0 }.joined(separator: " · ") }),
+                j["water_temp_c"].double.map { "\(Amount.format($0)) °C" },
+                j["image_count"].int.flatMap { $0 > 0 ? "\($0) photo\($0 == 1 ? "" : "s")" : nil }].compactMap { $0 }.joined(separator: " · ") },
+           rowImage: { $0["main_thumb"].string }),
         ListSpec(id: "paper", title: "Papers", fields: [
             .init(key: "manufacturer", label: "Maker", kind: .text),
             .init(key: "label", label: "Name", kind: .text),
@@ -287,9 +291,16 @@ struct RowsView: View {
             if let error = model.error { Text(error).font(Theme.small).listRowBackground(Theme.bg) }
             ForEach(shown, id: \.self["id"].int) { r in
                 Button { editing = r } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(spec.rowTitle(r)).font(Theme.body.weight(.bold))
-                        if let s = model.sub(r) { Text(s).font(Theme.small).foregroundStyle(Theme.subOnBox) }
+                    HStack(spacing: 10) {
+                        if let path = spec.rowImage?(r), let url = URL(string: path, relativeTo: store.server.base) {
+                            AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Theme.line }
+                                .frame(width: 52, height: 52).clipShape(.rect(cornerRadius: 5))
+                                .accessibilityLabel("Main photo")
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(spec.rowTitle(r)).font(Theme.body.weight(.bold))
+                            if let s = model.sub(r) { Text(s).font(Theme.small).foregroundStyle(Theme.subOnBox) }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(model.isHidden(r) ? 0.5 : 1)
