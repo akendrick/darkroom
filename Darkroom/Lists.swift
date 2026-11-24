@@ -15,7 +15,11 @@ struct ListSpec: Identifiable, Hashable {
         /// 0-100 % on a slider (whole numbers); untouched means not recorded, and Clear puts it back.
         case percent
         /// The test's photos (main photo and others); needs the row to be saved first.
-        case photos }
+        case photos
+        /// A test's prints from the gallery (kind "size" or "pigment"); needs the row to be saved first.
+        case prints(String)
+        /// A pigment test's pigments, each with grams and/or mL.
+        case pigments }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -31,6 +35,8 @@ struct ListSpec: Identifiable, Hashable {
     var listRes: String? = nil
     /// A small picture for the row (a sizing test's main photo): a path on knotwork.ca.
     var rowImage: ((JSON) -> String?)? = nil
+    /// A test list (Tests.swift): each row has the tried mark on the left and its main print on the right.
+    var testKind: TestKind? = nil
 
     /// The API resource: the id up to any ":" ("material:3" → material).
     var resource: String { String(id.split(separator: ":").first ?? "") }
@@ -76,6 +82,7 @@ struct ListSpec: Identifiable, Hashable {
         ], required: ["paper_id"], archives: true,
            rowTitle: { Material(what: .support_paper, row: $0).label }, rowSub: { $0["treatment_label"].string }),
         ListSpec(id: "size_test", title: "Sizing tests", fields: [
+            .init(key: "tried", label: "It has been tried", kind: .flag),
             .init(key: "lane_id", label: "Lane", kind: .pick("size_lane")),
             .init(key: "support_paper_id", label: "Sample sheet", kind: .pick("support_paper")),
             .init(key: "retention_pct", label: "Image retention %", kind: .percent),
@@ -98,7 +105,8 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "rescored_on", label: "Re-scored on", kind: .date),
             .init(key: "rescore_retention_pct", label: "Re-score retention %", kind: .percent),
             .init(key: "rescore_highlight_colour", label: "Re-score staining 0-3", kind: .rating(0, 3)),
-            .init(key: "photos", label: "Photos (first is the main photo)", kind: .photos),
+            .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("size")),
+            .init(key: "photos", label: "Other photos of the test", kind: .photos),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["lane_id", "support_paper_id"], archives: false,
            rowTitle: { [$0["code"].string, $0["lane"].string].compactMap { $0 }.joined(separator: " ") },
@@ -107,8 +115,44 @@ struct ListSpec: Identifiable, Hashable {
                 j["retention_pct"].double.map { "\(Amount.format($0))% kept" },
                 j["presoak_seconds"].int.map { "pre \(Duration.format($0))" }, j["mating_seconds"].int.map { "mating \(Duration.format($0))" },
                 j["water_temp_c"].double.map { "\(Amount.format($0)) °C" },
+                j["print_count"].int.flatMap { $0 > 1 ? "\($0) prints" : nil },
                 j["image_count"].int.flatMap { $0 > 0 ? "\($0) photo\($0 == 1 ? "" : "s")" : nil }].compactMap { $0 }.joined(separator: " · ") },
-           rowImage: { $0["main_thumb"].string }),
+           rowImage: { $0["main_thumb"].string }, testKind: .size),
+        ListSpec(id: "pigment_test", title: "Pigment tests", fields: [
+            .init(key: "tried", label: "It has been tried", kind: .flag),
+            .init(key: "tried_on", label: "Tried on", kind: .date),
+            .init(key: "code", label: "Code (PT9)", kind: .text),
+            .init(key: "name", label: "What is being tested", kind: .text),
+            .init(key: "chemistry_id", label: "Glop batch", kind: .pick("chemistry")),
+            .init(key: "carbon_tissue_id", label: "Tissue", kind: .pick("carbon_tissue")),
+            .init(key: "pigments", label: "Pigments: amount of each", kind: .pigments),
+            .init(key: "gelatin_ml", label: "Gelatin solution mL", kind: .number),
+            .init(key: "antifloc", label: "Anti-flocculant (empty if none)", kind: .text),
+            .init(key: "antifloc_amount", label: "Anti-flocculant amount", kind: .number),
+            .init(key: "antifloc_unit", label: "Anti-flocculant unit", kind: .choice(["mL", "drops", "g"])),
+            .init(key: "exposure_seconds", label: "Exposure (e.g. 3 or 180s)", kind: .duration),
+            .init(key: "dmax", label: "Black density (Dmax) 1-5", kind: .rating(1, 5)),
+            .init(key: "dmax_measured", label: "Measured density (optional)", kind: .number),
+            .init(key: "highlight", label: "Highlight separation 1-5", kind: .rating(1, 5)),
+            .init(key: "tone", label: "Colour / tone 1-5", kind: .rating(1, 5)),
+            .init(key: "staining", label: "Staining / clearing 1-5", kind: .rating(1, 5)),
+            .init(key: "gloss", label: "Glossy to matte 0-5", kind: .rating(0, 5)),
+            .init(key: "warmth", label: "Warm or cool black 0-5", kind: .rating(0, 5)),
+            .init(key: "secondary_colour", label: "Secondary colour", kind: .choice(["None", "Blue", "Red", "Purple", "Green", "Brown", "Other"])),
+            .init(key: "secondary_note", label: "Secondary colour note", kind: .text),
+            .init(key: "curl", label: "Tissue curl", kind: .choice(["None", "Some", "Lots"])),
+            .init(key: "flagging", label: "Tissue flagging 0-5", kind: .rating(0, 5)),
+            .init(key: "sensitivity", label: "Tissue sensitivity 1-5", kind: .rating(1, 5)),
+            .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("pigment")),
+            .init(key: "notes", label: "Notes", kind: .notes),
+        ], required: [], archives: true,
+           rowTitle: { pigmentTestLabel($0) },
+           rowSub: { j in
+               [j["pigment_summary"].string,
+                j["antifloc"].string.map { a in [a, j["antifloc_amount"].double.map { Amount.format($0) }, j["antifloc_unit"].string].compactMap { $0 }.joined(separator: " ") },
+                pigmentScores(j),
+                j["print_count"].int.flatMap { $0 > 1 ? "\($0) prints" : nil }].compactMap { $0 }.joined(separator: " · ") },
+           rowImage: { $0["main_thumb"].string }, testKind: .pigment),
         ListSpec(id: "paper", title: "Papers", fields: [
             .init(key: "manufacturer", label: "Maker", kind: .text),
             .init(key: "label", label: "Name", kind: .text),
@@ -172,6 +216,22 @@ struct ListSpec: Identifiable, Hashable {
                    .compactMap { $0 }.joined(separator: " · ")
            },
            fixed: ["kind_id": .from(k.id)], listRes: "material&kind_id=\(k.id)")
+    }
+
+    /// "PT6 Black Velvet India ink…", or the tissue, or its number.
+    static func pigmentTestLabel(_ j: JSON) -> String {
+        let s = [j["code"].string, j["name"].string].compactMap { $0 }.joined(separator: " ")
+        return s.isEmpty ? (j["tissue"].string ?? "Pigment test #\(j["id"].int ?? 0)") : s
+    }
+    /// What was scored on a pigment test, shortest first: "Dmax 4 · tone 5 · curl Some".
+    static func pigmentScores(_ j: JSON) -> String? {
+        let parts: [String?] = [
+            j["dmax"].int.map { "Dmax \($0)" }, j["highlight"].int.map { "highlights \($0)" }, j["tone"].int.map { "tone \($0)" },
+            j["staining"].int.map { "staining \($0)" }, j["gloss"].int.map { "gloss→matte \($0)" }, j["warmth"].int.map { "cool→warm \($0)" },
+            j["flagging"].int.map { "flagging \($0)" }, j["sensitivity"].int.map { "sensitivity \($0)" },
+            j["curl"].string.map { "curl \($0)" }, j["secondary_colour"].string.map { "2nd colour \($0)" }]
+        let s = parts.compactMap { $0 }.joined(separator: " · ")
+        return s.isEmpty ? nil : s
     }
 
     static func chemLabel(_ j: JSON) -> String {
@@ -256,6 +316,19 @@ final class RowsModel {
         catch { self.error = error.localizedDescription }
     }
 
+    /// The tried mark: on dates it today (the server does), off clears the date.
+    func setTried(_ r: JSON, _ on: Bool, _ store: AppStore) async {
+        guard let id = r["id"].int else { return }
+        if let i = rows.firstIndex(where: { $0["id"].int == id }) {     // show it straight away
+            var o = rows[i].object; o["tried"] = .from(on ? 1 : 0); rows[i] = .object(o)
+        }
+        let body: JSON = on ? .object(["tried": 1]) : .object(["tried": 0, "tried_on": .null])
+        do { _ = try await store.server.request("darkroom-api.php?res=\(spec.resource)&id=\(id)", method: "PATCH", body: body); error = nil }
+        catch let e as ServerError { error = e.retry ? "Can't reach knotwork.ca — try again with a connection" : e.message }
+        catch { self.error = error.localizedDescription }
+        await load(store)
+    }
+
     func sub(_ r: JSON) -> String? {
         let s = [isHidden(r) ? "Hidden" : nil, spec.rowSub(r)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         return s.isEmpty ? nil : s
@@ -278,6 +351,8 @@ struct RowsView: View {
     @State private var search = ""
     @State private var editing: JSON?
     @State private var adding = false
+    /// A test's main print, opened from its thumbnail.
+    @State private var openPrint: Int?
 
     init(spec: ListSpec) { self.spec = spec; _model = State(initialValue: RowsModel(spec)) }
 
@@ -290,6 +365,7 @@ struct RowsView: View {
         List {
             if let error = model.error { Text(error).font(Theme.small).listRowBackground(Theme.bg) }
             ForEach(shown, id: \.self["id"].int) { r in
+                if spec.testKind != nil { testRow(r) } else {
                 Button { editing = r } label: {
                     HStack(spacing: 10) {
                         if let path = spec.rowImage?(r), let url = URL(string: path, relativeTo: store.server.base) {
@@ -314,8 +390,10 @@ struct RowsView: View {
                         Button(model.isHidden(r) ? "SHOW" : "HIDE") { Task { await model.setHidden(r, !model.isHidden(r), store) } }.tint(Theme.dim)
                     }
                 }
+                }
             }
         }
+        .navigationDestination(item: $openPrint) { PrintByID(id: $0) }
         .searchable(text: $search)
         .scrollContentBackground(.hidden)
         .background(Theme.bg)
@@ -339,6 +417,44 @@ struct RowsView: View {
             RowForm(spec: spec, row: w.row) { await model.load(store) }
         }
         .sheet(isPresented: $adding) { RowForm(spec: spec, row: nil) { await model.load(store) } }
+    }
+}
+
+extension RowsView {
+    /// A test's row: tried mark on the left, the test in the middle (tap to edit), its main print on the right (tap to open the print).
+    @ViewBuilder func testRow(_ r: JSON) -> some View {
+        HStack(spacing: 8) {
+            TriedButton(on: r["tried"].flag) { Task { await model.setTried(r, !r["tried"].flag, store) } }
+            Button { editing = r } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(spec.rowTitle(r)).font(Theme.body.weight(.bold)).multilineTextAlignment(.leading)
+                    if let s = model.sub(r) { Text(s).font(Theme.small).foregroundStyle(Theme.subOnBox).multilineTextAlignment(.leading) }
+                    if r["tried"].flag, let d = r["tried_on"].string { Text("tried \(d)").font(.caption2).foregroundStyle(Theme.subOnBox) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if let path = spec.rowImage?(r), let url = URL(string: path, relativeTo: store.server.base) {
+                Button {
+                    if let pid = r["main_photo_id"].int { openPrint = pid } else { editing = r }
+                } label: {
+                    AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Theme.line }
+                        .frame(width: 56, height: 56).clipShape(.rect(cornerRadius: 5))
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(r["main_photo_id"].int != nil ? "Open the main print" : "Main photo")
+            }
+        }
+        .opacity(model.isHidden(r) ? 0.5 : 1)
+        .listRowBackground(Theme.box).foregroundStyle(.black)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("DELETE") { model.confirmDelete = r }.tint(Theme.red)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if spec.archives {
+                Button(model.isHidden(r) ? "SHOW" : "HIDE") { Task { await model.setHidden(r, !model.isHidden(r), store) } }.tint(Theme.dim)
+            }
+        }
     }
 }
 
@@ -496,12 +612,18 @@ struct RowForm: View {
     @State private var scoreKey: [String: [String]] = {
         let colour = ["0  clean paper white", "1  faint tint, only just visible", "2  noticeable tint", "3  strong stain or veil"]
         return ["highlight_colour": colour, "rescore_highlight_colour": colour,
-                "score_surface": ["0  smooth", "5  highly textured"]]
+                "score_surface": ["0  smooth", "5  highly textured"],
+                // pigment tests
+                "gloss": ["0  glossy", "5  matte"], "warmth": ["0  coolest black", "5  warmest black"],
+                "flagging": ["0  none", "5  extreme"], "sensitivity": ["1  slow", "5  very fast"],
+                "tone": ["how much you like the colour"], "staining": ["1  heavy stain", "5  clears clean"]]
     }()
     private static let scoreCodes = ["score_display": ("support", "display"), "score_density": ("support", "density"),
                                      "curl_score": ("tissue", "curl")]
     /// The "Made from" rows, kept apart from values so typing in them keeps focus.
     @State private var links: [LinkRow] = []
+    /// A pigment test's pigments, kept apart from values like links.
+    @State private var pigs: [PigmentAmount] = []
     @State private var busy = false
     @State private var error: String?
     @State private var confirmArchive = false
@@ -581,6 +703,24 @@ struct RowForm: View {
                     ForEach(words, id: \.self) { w in Text(w).tag(String?.some(w)) }
                 }.pickerStyle(.menu).labelsHidden()
             }
+        case .prints(let kind):
+            if let id = row?["id"].int, let k = TestKind(rawValue: kind) {
+                Field(label: f.label) { TestPrints(kind: k, testId: id) }
+            } else {
+                Field(label: f.label) { Text("Save the test first, then link prints.").font(Theme.small).foregroundStyle(Theme.subOnBox) }
+            }
+        case .pigments:
+            Field(label: f.label) {
+                PigmentsEditor(rows: $pigs, options: options["pigment"] ?? []) {
+                    guard let cid = values["chemistry_id"]?.int else { error = "Choose the glop batch first"; return }
+                    Task {
+                        if let c = try? await store.server.request("darkroom-api.php?res=chemistry&id=\(cid)") {
+                            pigs = c["pigments"].array.map(PigmentAmount.init)
+                            if values["gelatin_ml"]?.double == nil, let v = c["volume_ml"].double { values["gelatin_ml"] = .from(v) }
+                        }
+                    }
+                }
+            }
         case .photos:
             if let id = row?["id"].int {
                 Field(label: f.label) { SizeTestPhotos(testId: id) }
@@ -649,13 +789,20 @@ struct RowForm: View {
         }
     }
 
+    /// Fields kept in values and sent as they are (not the editors that save themselves or keep their own rows).
+    private static func stored(_ k: ListSpec.Kind) -> Bool {
+        switch k { case .links, .photos, .prints, .pigments: false; default: true }
+    }
+
     private func text(_ key: String) -> Binding<String> {
         Binding(get: { values[key]?.string ?? "" }, set: { values[key] = $0.isEmpty ? .null : .string($0) })
     }
 
     private func setUp() async {
         if values.isEmpty {
-            for f in spec.fields where f.kind != .links && f.kind != .photos { values[f.key] = row?[f.key] ?? .null }
+            for f in spec.fields where Self.stored(f.kind) { values[f.key] = row?[f.key] ?? .null }
+            pigs = (row?["pigments"].array ?? []).map(PigmentAmount.init)
+            if pigs.isEmpty && spec.fields.contains(where: { $0.kind == .pigments }) { pigs = [PigmentAmount()] }
             if spec.fields.contains(where: { $0.kind == .stage }) { originalStage = row?["rev_stage_id"].int; values["stage_id"] = .from(originalStage) }
             links = (row?["links"].array ?? []).map(LinkRow.init(link:))
             if row == nil {     // a new one is made today
@@ -671,6 +818,7 @@ struct RowForm: View {
                     .compactMap { n, k in c[k].string.map { "\(n)  \($0)" } }
             }
         }
+        if spec.fields.contains(where: { $0.kind == .pigments }), options["pigment"] == nil { options["pigment"] = (try? await store.list("pigment")) ?? [] }
         for f in spec.fields {
             if case .pick(let s) = f.kind, options[s] == nil {
                 do { options[s] = try await store.list(s) }
@@ -690,6 +838,7 @@ struct RowForm: View {
         var body = values.merging(spec.fixed) { _, f in f }
         // Sent only when changed: a batch walked from Rev 1 keeps Rev 1.
         if body["stage_id"]?.int == originalStage { body.removeValue(forKey: "stage_id") }
+        if spec.fields.contains(where: { $0.kind == .pigments }) { body["pigments"] = .array(pigs.compactMap(\.asJSON)) }
         if spec.fields.contains(where: { $0.kind == .links }) {
             // Only when the server sent links (one without them would lose nothing either way).
             if row == nil || (row?["links"] ?? .null) != .null { body["links"] = .array(links.compactMap(\.asLink)) }

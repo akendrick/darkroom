@@ -183,7 +183,7 @@ private struct Tile: View {
 /// The prints in gallery order, one at a time: swipe left for the next,
 /// right for the one before. Paging, so it wins over the swipe back to the grid
 /// (which still works from the first print).
-private struct PrintPager: View {
+struct PrintPager: View {
     let base: URL
     /// Reloads the gallery and hands back its new list, so the open page
     /// shows an edit straight away (the list it was opened with goes stale).
@@ -309,6 +309,7 @@ struct PrintDetail: View {
                         }
                     }
                 }
+                if let id = print["id"].int, print["status"].string != "in_progress" { PrintTests(photoId: id) }
             }
             .padding(16)
         }
