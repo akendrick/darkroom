@@ -216,17 +216,18 @@ struct ProcessesList: View {
                     VStack(spacing: 6) {
                         ForEach(Array(p.sections.enumerated()), id: \.element.key) { i, s in
                             stage(s, in: p, at: i)
-                        }
-                        // Sizing tests belong to carbon printing: the support papers they test are for this process.
-                        if p.name.localizedCaseInsensitiveContains("carbon") {
-                            NavigationLink(value: ListSpec.of("size_test")) {
-                                HStack {
-                                    Label("Sizing tests", systemImage: "square.grid.3x3")
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
+                            if p.sizingTestsAfter == i {
+                                // Sizing tests belong to carbon printing: the support papers they test are for this process.
+                                NavigationLink(value: ListSpec.of("size_test")) {
+                                    HStack {
+                                        Label("Sizing tests", systemImage: "square.grid.3x3")
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                    }
                                 }
+                                .buttonStyle(TreeRowStyle(fill: Theme.stageBar, text: Theme.stageText))
+                                .padding(.leading, 24)
                             }
-                            .buttonStyle(TreeRowStyle(fill: Theme.stageBar, text: Theme.stageText))
                         }
                     }
                     .padding(.leading, 12)
@@ -349,6 +350,15 @@ struct ProcessesList: View {
     }
 }
 
+extension ProcessDoc {
+    /// Carbon printing shows its sizing tests right after the stage that sizes
+    /// the final support (or after the last stage if none is named so).
+    var sizingTestsAfter: Int? {
+        guard name.localizedCaseInsensitiveContains("carbon"), !sections.isEmpty else { return nil }
+        return sections.firstIndex { $0.title.localizedCaseInsensitiveContains("sizing") } ?? sections.count - 1
+    }
+}
+
 struct ProcessRoute: Hashable { let id: Int; var section: Int? }
 
 // MARK: Overview and sections
@@ -387,6 +397,22 @@ struct ProcessView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(WalkButtonStyle())
+                        // Sizing tests belong to carbon printing: the support papers they test are for this process.
+                        if p.sizingTestsAfter == i {
+                            NavigationLink(value: ListSpec.of("size_test")) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "square.grid.3x3").font(.system(size: 24, weight: .semibold)).frame(width: 34, alignment: .trailing)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Sizing tests").font(Theme.body.weight(.bold))
+                                        Text("Support papers sized for this process").font(Theme.small).foregroundStyle(Theme.dim)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.body.weight(.bold))
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(WalkButtonStyle())
+                        }
                     }
                 }
                 .padding(20)
