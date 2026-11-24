@@ -6,7 +6,9 @@ import SwiftUI
 /// and saved straight to the server (so these need a connection).
 struct ListSpec: Identifiable, Hashable {
     /// stage: the Stage a batch or tissue was made from (its current revision is recorded).
-    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links, stage }
+    enum Kind: Hashable { case text, notes, number, whole, date, dateTime, flag, pick(String), links, stage
+        /// A fixed set of words (Matte / Glossy). rating: a score from lo to hi, one tap, tap again to clear.
+        case choice([String]), rating(Int, Int) }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -48,6 +50,9 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "chemistry_id", label: "Glop batch", kind: .pick("chemistry")),
             .init(key: "stage_id", label: "Stage it was made from", kind: .stage),
             .init(key: "amount_poured", label: "Amount poured", kind: .text),
+            .init(key: "finish", label: "Matte or glossy", kind: .choice(["Matte", "Glossy"])),
+            .init(key: "curl_mm", label: "Curl: corner lift mm", kind: .number),
+            .init(key: "curl_score", label: "Curl 1-5 (5 = flat)", kind: .rating(1, 5)),
             .init(key: "links", label: "Made from", kind: .links),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["date_poured"], archives: true,
@@ -61,6 +66,32 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: ["paper_id"], archives: true,
            rowTitle: { Material(what: .support_paper, row: $0).label }, rowSub: { $0["treatment_label"].string }),
+        ListSpec(id: "size_test", title: "Sizing tests", fields: [
+            .init(key: "lane_id", label: "Lane", kind: .pick("size_lane")),
+            .init(key: "support_paper_id", label: "Sample sheet", kind: .pick("support_paper")),
+            .init(key: "retention_pct", label: "Image retention %", kind: .number),
+            .init(key: "frilling", label: "Frilling / lifting", kind: .choice(["None", "Minor", "Moderate", "Failed"])),
+            .init(key: "highlight_colour", label: "Highlight colour 0-3", kind: .rating(0, 3)),
+            .init(key: "score_display", label: "Image display 1-5", kind: .rating(1, 5)),
+            .init(key: "score_density", label: "Density 1-5", kind: .rating(1, 5)),
+            .init(key: "score_surface", label: "Surface 1-5", kind: .rating(1, 5)),
+            .init(key: "gloss", label: "Gloss", kind: .choice(["Matte", "Satin", "Gloss"])),
+            .init(key: "measured_display", label: "Steps visible (optional)", kind: .number),
+            .init(key: "carbon_tissue_id", label: "Tissue used", kind: .pick("carbon_tissue")),
+            .init(key: "sized_on", label: "Sized", kind: .date),
+            .init(key: "coats", label: "Coats", kind: .whole),
+            .init(key: "actual_dose", label: "Actual mix / dose used", kind: .text),
+            .init(key: "cure_start", label: "Cure start", kind: .date),
+            .init(key: "printed_on", label: "Print date", kind: .date),
+            .init(key: "rescored_on", label: "Re-scored on", kind: .date),
+            .init(key: "rescore_retention_pct", label: "Re-score retention %", kind: .number),
+            .init(key: "rescore_highlight_colour", label: "Re-score colour 0-3", kind: .rating(0, 3)),
+            .init(key: "notes", label: "Notes", kind: .notes),
+        ], required: ["lane_id", "support_paper_id"], archives: false,
+           rowTitle: { [$0["code"].string, $0["lane"].string].compactMap { $0 }.joined(separator: " ") },
+           rowSub: { j in
+               [j["weighted_score"].double.map { "score \(Amount.format($0))" }, j["result"].string,
+                j["retention_pct"].double.map { "\(Amount.format($0))% kept" }].compactMap { $0 }.joined(separator: " · ") }),
         ListSpec(id: "paper", title: "Papers", fields: [
             .init(key: "manufacturer", label: "Maker", kind: .text),
             .init(key: "label", label: "Name", kind: .text),
@@ -134,6 +165,9 @@ struct ListSpec: Identifiable, Hashable {
         switch source {
         case "chemistry": chemLabel(j)
         case "paper": Paper(j).name
+        case "size_lane": [j["code"].string, j["name"].string].compactMap { $0 }.joined(separator: " ")
+        case "support_paper": Material(what: .support_paper, row: j).label
+        case "carbon_tissue": Material(what: .carbon_tissue, row: j).label
         default: j["name"].string ?? "#\(j["id"].int ?? 0)"
         }
     }
@@ -506,6 +540,28 @@ struct RowForm: View {
                         Text(ListSpec.optionLabel(source, o)).tag(o["id"].int)
                     }
                 }.pickerStyle(.menu).labelsHidden()
+            }
+        case .choice(let words):
+            Field(label: f.label) {
+                Picker(f.label, selection: Binding(get: { values[f.key]?.string }, set: { values[f.key] = .from($0) })) {
+                    Text("—").tag(String?.none)
+                    ForEach(words, id: \.self) { w in Text(w).tag(String?.some(w)) }
+                }.pickerStyle(.menu).labelsHidden()
+            }
+        case .rating(let lo, let hi):
+            Field(label: f.label) {
+                HStack(spacing: 8) {
+                    ForEach(Array(lo...hi), id: \.self) { n in
+                        let on = values[f.key]?.int == n
+                        Button { values[f.key] = on ? .null : .from(n) } label: {
+                            Text("\(n)").font(Theme.body.weight(.bold)).frame(width: 42, height: 42)
+                                .foregroundStyle(on ? Theme.onRed : Theme.red)
+                                .background(on ? Theme.red : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.red, lineWidth: 1.5))
+                        }.buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
             }
         case .links:
             VStack(alignment: .leading, spacing: 6) {
