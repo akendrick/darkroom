@@ -99,7 +99,10 @@ struct HomeView: View {
                 .navigationDestination(for: ProcessRoute.self) { r in
                     if let n = r.section { SectionPager(id: r.id, index: n) } else { ProcessView(id: r.id) }
                 }
-                .navigationDestination(for: ListSpec.self) { RowsView(spec: $0) }
+                .navigationDestination(for: ListSpec.self) { s in
+                    // A made-up kind of test rebuilds its list when its fields change.
+                    if s.testKind == .custom, let kid = s.fixed["test_kind_id"]?.int { CustomTestsView(kindId: kid) } else { RowsView(spec: s) }
+                }
         }
         .environment(\.goHome) { path = NavigationPath(); editing = false; settings = false; chemistryOptions = false }
         .tint(Theme.red)

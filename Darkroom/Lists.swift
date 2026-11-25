@@ -19,7 +19,9 @@ struct ListSpec: Identifiable, Hashable {
         /// A test's prints from the gallery (kind "size" or "pigment"); needs the row to be saved first.
         case prints(String)
         /// A pigment test's pigments, each with grams and/or mL.
-        case pigments }
+        case pigments
+        /// A test's variant (letter, name, chosen mark) and Split into variants; needs the row to be saved first.
+        case variant }
     struct Field: Hashable { let key: String, label: String, kind: Kind }
 
     let id: String              // the API resource
@@ -105,6 +107,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "rescored_on", label: "Re-scored on", kind: .date),
             .init(key: "rescore_retention_pct", label: "Re-score retention %", kind: .percent),
             .init(key: "rescore_highlight_colour", label: "Re-score staining 0-3", kind: .rating(0, 3)),
+            .init(key: "variant", label: "Variants", kind: .variant),
             .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("size")),
             .init(key: "photos", label: "Other photos of the test", kind: .photos),
             .init(key: "notes", label: "Notes", kind: .notes),
@@ -143,6 +146,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "curl", label: "Tissue curl", kind: .choice(["None", "Some", "Lots"])),
             .init(key: "flagging", label: "Tissue flagging 0-5", kind: .rating(0, 5)),
             .init(key: "sensitivity", label: "Tissue sensitivity 1-5", kind: .rating(1, 5)),
+            .init(key: "variant", label: "Variants", kind: .variant),
             .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("pigment")),
             .init(key: "notes", label: "Notes", kind: .notes),
         ], required: [], archives: true,
@@ -216,6 +220,56 @@ struct ListSpec: Identifiable, Hashable {
                    .compactMap { $0 }.joined(separator: " · ")
            },
            fixed: ["kind_id": .from(k.id)], listRes: "material&kind_id=\(k.id)")
+    }
+
+    /// A kind of test the owner made up (test_kind with its fields): its tests' list and form.
+    /// Each field is f_<id> in the row and the body; result fields start empty in a new variant.
+    static func custom(_ k: JSON) -> ListSpec {
+        let kid = k["id"].int ?? 0
+        var fields: [Field] = [
+            .init(key: "tried", label: "It has been tried", kind: .flag),
+            .init(key: "tried_on", label: "Tried on", kind: .date),
+            .init(key: "code", label: "Code", kind: .text),
+            .init(key: "name", label: "What is being tested", kind: .text),
+        ]
+        for f in k["fields"].array {
+            guard let id = f["id"].int else { continue }
+            let lo = f["lo"].int ?? 1, hi = f["hi"].int ?? 5
+            let kind: Kind = switch f["type"].string {
+            case "whole": .whole
+            case "text": .text
+            case "notes": .notes
+            case "choice": .choice(f["options"].array.compactMap(\.string))
+            case "score": .rating(lo, hi)
+            case "flag": .flag
+            case "date": .date
+            case "duration": .duration
+            case "pick": .pick(f["options"].string ?? "pigment")
+            default: .number
+            }
+            var label = f["name"].string ?? "Field"
+            if f["type"].string == "score" { label += " \(lo)-\(hi)" }
+            if let u = f["unit"].string, ["number", "whole"].contains(f["type"].string ?? "") { label += " (\(u))" }
+            if f["type"].string == "duration" { label += " (e.g. 90s or 1:30)" }
+            if f["is_result"].flag { label += " · result" }
+            fields.append(.init(key: "f_\(id)", label: label, kind: kind))
+        }
+        fields += [
+            .init(key: "notes", label: "Notes", kind: .notes),
+            .init(key: "variant", label: "Variants", kind: .variant),
+            .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("custom")),
+        ]
+        return ListSpec(id: "custom_test:\(kid)", title: k["name"].string ?? "Tests", fields: fields, required: [], archives: true,
+            rowTitle: { j in
+                let s = [j["code"].string, j["name"].string].compactMap { $0 }.joined(separator: " ")
+                return s.isEmpty ? "Test #\(j["id"].int ?? 0)" : s
+            },
+            rowSub: { j in
+                let s = [j["setup"].string, j["results"].string, j["print_count"].int.flatMap { $0 > 1 ? "\($0) prints" : nil }]
+                    .compactMap { $0 }.joined(separator: " · ")
+                return s.isEmpty ? nil : s
+            },
+            fixed: ["test_kind_id": .from(kid)], listRes: "custom_test&kind_id=\(kid)", rowImage: { $0["main_thumb"].string }, testKind: .custom)
     }
 
     /// "PT6 Black Velvet India ink…", or the tissue, or its number.
@@ -354,6 +408,12 @@ struct RowsView: View {
     /// A test's main print, opened from its thumbnail.
     @State private var openPrint: Int?
 
+    /// Opens a row by its id once the form that made it has closed (a new variant).
+    private func open(_ id: Int) async {
+        try? await Task.sleep(for: .milliseconds(500))
+        if let r = try? await store.server.request("darkroom-api.php?res=\(spec.resource)&id=\(id)") { editing = r }
+    }
+
     init(spec: ListSpec) { self.spec = spec; _model = State(initialValue: RowsModel(spec)) }
 
     private var shown: [JSON] {
@@ -414,7 +474,7 @@ struct RowsView: View {
         .task { await model.load(store) }
         .confirmsDelete(model, store)
         .sheet(item: Binding(get: { editing.map(Wrapped.init) }, set: { editing = $0?.row })) { w in
-            RowForm(spec: spec, row: w.row) { await model.load(store) }
+            RowForm(spec: spec, row: w.row, saved: { await model.load(store) }, openRow: { id in Task { await open(id) } })
         }
         .sheet(isPresented: $adding) { RowForm(spec: spec, row: nil) { await model.load(store) } }
     }
@@ -422,12 +482,21 @@ struct RowsView: View {
 
 extension RowsView {
     /// A test's row: tried mark on the left, the test in the middle (tap to edit), its main print on the right (tap to open the print).
+    /// A variant (B, C …) sits indented under the test it was split from, which shows its own letter (A) under its title.
     @ViewBuilder func testRow(_ r: JSON) -> some View {
+        let child = r["parent_id"].int != nil
         HStack(spacing: 8) {
             TriedButton(on: r["tried"].flag) { Task { await model.setTried(r, !r["tried"].flag, store) } }
+            if child {
+                Image(systemName: "arrow.turn.down.right").font(.footnote.weight(.bold)).foregroundStyle(Theme.subOnBox)
+                    .accessibilityHidden(true)
+            }
             Button { editing = r } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(spec.rowTitle(r)).font(Theme.body.weight(.bold)).multilineTextAlignment(.leading)
+                    if child { VariantLine(row: r) } else {
+                        Text(spec.rowTitle(r)).font(Theme.body.weight(.bold)).multilineTextAlignment(.leading)
+                        if r["variant"].string != nil { VariantLine(row: r) }
+                    }
                     if let s = model.sub(r) { Text(s).font(Theme.small).foregroundStyle(Theme.subOnBox).multilineTextAlignment(.leading) }
                     if r["tried"].flag, let d = r["tried_on"].string { Text("tried \(d)").font(.caption2).foregroundStyle(Theme.subOnBox) }
                 }
@@ -605,7 +674,10 @@ struct RowForm: View {
     let spec: ListSpec
     let row: JSON?
     let saved: () async -> Void
+    /// After Split into variants: opens the new variant (the list's own sheet).
+    var openRow: ((Int) -> Void)? = nil
     @State private var values: [String: JSON] = [:]
+    @State private var splitting = false
     @State private var options: [String: [JSON]] = [:]
     /// What each score means, shown under its buttons: the 0-3 highlight key is fixed;
     /// the 1-5 scores are read from the server's anchors (size_criterion) so editing them there changes the app.
@@ -649,6 +721,11 @@ struct RowForm: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button(busy ? "Saving…" : "Save") { save() }.bold().disabled(busy) }
+            }
+            .sheet(isPresented: $splitting) {
+                if let row, let kind = spec.testKind {
+                    VariantSplitSheet(kind: kind, row: row) { a, b, sheet in await split(a, b, sheet) }
+                }
             }
             .confirmationDialog("Remove from lists?", isPresented: $confirmArchive, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { send(.object(["archived": .from(1)])) }
@@ -703,6 +780,8 @@ struct RowForm: View {
                     ForEach(words, id: \.self) { w in Text(w).tag(String?.some(w)) }
                 }.pickerStyle(.menu).labelsHidden()
             }
+        case .variant:
+            Field(label: f.label) { variantSection }
         case .prints(let kind):
             if let id = row?["id"].int, let k = TestKind(rawValue: kind) {
                 Field(label: f.label) { TestPrints(kind: k, testId: id) }
@@ -791,7 +870,7 @@ struct RowForm: View {
 
     /// Fields kept in values and sent as they are (not the editors that save themselves or keep their own rows).
     private static func stored(_ k: ListSpec.Kind) -> Bool {
-        switch k { case .links, .photos, .prints, .pigments: false; default: true }
+        switch k { case .links, .photos, .prints, .pigments, .variant: false; default: true }
     }
 
     private func text(_ key: String) -> Binding<String> {
@@ -805,6 +884,10 @@ struct RowForm: View {
             if pigs.isEmpty && spec.fields.contains(where: { $0.kind == .pigments }) { pigs = [PigmentAmount()] }
             if spec.fields.contains(where: { $0.kind == .stage }) { originalStage = row?["rev_stage_id"].int; values["stage_id"] = .from(originalStage) }
             links = (row?["links"].array ?? []).map(LinkRow.init(link:))
+            if spec.fields.contains(where: { $0.kind == .variant }), row?["variant"].string != nil {
+                values["variant_label"] = row?["variant_label"] ?? .null
+                values["chosen"] = row?["chosen"] ?? .from(0)
+            }
             if row == nil {     // a new one is made today
                 for f in spec.fields where f.kind == .date && spec.required.contains(f.key) { values[f.key] = .string(fmt(.now, false)) }
             }
@@ -832,8 +915,14 @@ struct RowForm: View {
     }
 
     private func save() {
+        guard let body = makeBody() else { return }
+        send(body)
+    }
+
+    /// What Save sends: the values, the pigments and the links; nil (with the error shown) when something needed is missing.
+    private func makeBody() -> JSON? {
         if let miss = spec.required.first(where: { values[$0]?.string == nil }) {
-            error = "\(spec.fields.first { $0.key == miss }?.label ?? miss) is needed"; return
+            error = "\(spec.fields.first { $0.key == miss }?.label ?? miss) is needed"; return nil
         }
         var body = values.merging(spec.fixed) { _, f in f }
         // Sent only when changed: a batch walked from Rev 1 keeps Rev 1.
@@ -843,7 +932,47 @@ struct RowForm: View {
             // Only when the server sent links (one without them would lose nothing either way).
             if row == nil || (row?["links"] ?? .null) != .null { body["links"] = .array(links.compactMap(\.asLink)) }
         }
-        send(.object(body))
+        return .object(body)
+    }
+
+    /// The Variants field: this variant's letter, name and chosen mark, and Split / Add another variant.
+    @ViewBuilder private var variantSection: some View {
+        if let row, row["id"].int != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                if let v = row["variant"].string {
+                    HStack(spacing: 8) {
+                        VariantTag(letter: v)
+                        TextField("What this variant does differently", text: text("variant_label"))
+                    }
+                    Toggle("★ The chosen one", isOn: Binding(get: { values["chosen"]?.flag ?? false }, set: { values["chosen"] = .from($0 ? 1 : 0) }))
+                        .font(Theme.body.weight(.semibold)).tint(Theme.red)
+                } else {
+                    Text("One test. Split it when something changes partway: a different tool, amount or timing.")
+                        .font(Theme.small).foregroundStyle(Theme.subOnBox)
+                }
+                Button(row["variant"].string == nil ? "Split into variants (A, B …)" : "Add another variant", systemImage: "arrow.triangle.branch") { splitting = true }
+                    .font(Theme.body.weight(.semibold)).buttonStyle(.borderless)
+            }
+        } else {
+            Text("Save the test first, then it can be split into variants.").font(Theme.small).foregroundStyle(Theme.subOnBox)
+        }
+    }
+
+    /// Saves this test's changes, makes the new variant (a copy of this one's setup), then opens it. Returns an error to show, or nil.
+    private func split(_ labelA: String?, _ label: String?, _ sheet: Int?) async -> String? {
+        guard let id = row?["id"].int else { return nil }
+        guard let body = makeBody() else { return error }
+        do {
+            try await store.saveRow(spec.resource, id: id, body)
+            var b: [String: JSON] = ["label": .from(label), "label_a": .from(labelA)]
+            if let sheet { b["support_paper_id"] = .from(sheet) }
+            let r = try await store.server.request("darkroom-api.php?res=\(spec.resource)&variant_of=\(id)", method: "POST", body: .object(b))
+            await saved()
+            dismiss()
+            if let nid = r["id"].int { openRow?(nid) }
+            return nil
+        } catch let e as ServerError { return e.retry ? "Can't reach knotwork.ca — try again with a connection" : e.message }
+        catch { return error.localizedDescription }
     }
 
     private func send(_ body: JSON) {
