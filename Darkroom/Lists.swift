@@ -16,6 +16,8 @@ struct ListSpec: Identifiable, Hashable {
         case percent
         /// The test's photos (main photo and others); needs the row to be saved first.
         case photos
+        /// A sizing test's coats, each with its day and time; needs the row to be saved first.
+        case coats
         /// A test's prints from the gallery (kind "size" or "pigment"); needs the row to be saved first.
         case prints(String)
         /// A pigment test's pigments, each with grams and/or mL.
@@ -115,6 +117,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "carbon_tissue_id", label: "Tissue used", kind: .pick("carbon_tissue")),
             .init(key: "sized_on", label: "Sized", kind: .date),
             .init(key: "coats", label: "Coats", kind: .whole),
+            .init(key: "coat_list", label: "Coats: the day and time each layer went on", kind: .coats),
             .init(key: "actual_dose", label: "Actual mix / dose used", kind: .text),
             .init(key: "cure_start", label: "Cure start", kind: .date),
             .init(key: "printed_on", label: "Print date", kind: .date),
@@ -824,6 +827,12 @@ struct RowForm: View {
                     }
                 }
             }
+        case .coats:
+            if let id = row?["id"].int {
+                Field(label: f.label) { SizeTestCoats(testId: id) }
+            } else {
+                Field(label: f.label) { Text("Save the test first, then add its coats.").font(Theme.small).foregroundStyle(Theme.subOnBox) }
+            }
         case .photos:
             if let id = row?["id"].int {
                 Field(label: f.label) { SizeTestPhotos(testId: id) }
@@ -1122,5 +1131,155 @@ struct SizeTestPhotos: View {
     private func remove(_ i: JSON) async {
         guard let iid = i["id"].int else { return }
         await call("the removal") { _ = try await store.server.request("darkroom-api.php?res=size_test_image&id=\(testId)&image=\(iid)", method: "DELETE") }
+    }
+}
+
+
+/// A sizing test's coats of size, each with the day and time it went on (knotwork.ca migration 037).
+/// Add coat puts in a coat at the current day and time; tap a coat to change its day, time or note,
+/// or remove it. Coats go straight to knotwork.ca, so these need a connection. The server keeps the
+/// test's Sized, Coats and Cure start in step with them.
+struct SizeTestCoats: View {
+    let testId: Int
+    @Environment(AppStore.self) private var store
+    @State private var coats: [JSON] = []
+    @State private var note: String?
+    @State private var busy = false
+    @State private var editing: JSON?
+
+    private static let day: DateFormatter = { let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f }()
+    private static let hm: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "HH:mm"; return f }()
+    static func when(_ c: JSON) -> Date? {
+        guard let d = c["coated_on"].string, let base = day.date(from: d) else { return nil }
+        guard let t = c["coated_time"].string, let tm = hm.date(from: t) else { return base }
+        let k = Calendar.current.dateComponents([.hour, .minute], from: tm)
+        return Calendar.current.date(bySettingHour: k.hour ?? 0, minute: k.minute ?? 0, second: 0, of: base)
+    }
+    /// "+15 min", "+2 h 5 min", "+1 day" since the coat before.
+    static func gap(_ prev: JSON?, _ c: JSON) -> String? {
+        guard let prev, let a = when(prev), let b = when(c) else { return nil }
+        if prev["coated_time"].string == nil || c["coated_time"].string == nil {
+            let d = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: a), to: Calendar.current.startOfDay(for: b)).day ?? 0
+            return d < 0 ? "before the coat above" : d == 0 ? "same day" : "+\(d) day\(d == 1 ? "" : "s")"
+        }
+        let m = Int(b.timeIntervalSince(a) / 60)
+        if m < 0 { return "before the coat above" }
+        if m < 60 { return "+\(m) min" }
+        if m < 1440 { return "+\(m / 60) h" + (m % 60 > 0 ? " \(m % 60) min" : "") }
+        return "+\(m / 1440) d" + ((m % 1440) / 60 > 0 ? " \((m % 1440) / 60) h" : "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(coats.enumerated()), id: \.offset) { n, c in
+                Button { editing = c } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Coat \(c["coat_no"].int ?? n + 1)").font(Theme.body.weight(.bold))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text([c["coated_on"].string, c["coated_time"].string ?? "time not recorded"].compactMap { $0 }.joined(separator: "  "))
+                            if let t = c["note"].string { Text(t).font(Theme.small).foregroundStyle(Theme.subOnBox) }
+                        }
+                        Spacer()
+                        if let g = Self.gap(n > 0 ? coats[n - 1] : nil, c) { Text(g).font(Theme.small).foregroundStyle(Theme.subOnBox) }
+                    }
+                    .foregroundStyle(Theme.inkOnBox)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Change the day, time or note")
+            }
+            if coats.isEmpty { Text("No coats recorded yet.").font(Theme.small).foregroundStyle(Theme.subOnBox) }
+            Button { Task { await add() } } label: {
+                Label(busy ? "Saving…" : "Add coat (now)", systemImage: "plus").font(Theme.small.weight(.bold))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.inkOnBox).disabled(busy)
+            if let note { Text(note).font(Theme.small).foregroundStyle(Theme.inkOnBox) }
+        }
+        .task { await reload() }
+        .sheet(item: Binding(get: { editing.map { Wrapped2(row: $0) } }, set: { editing = $0?.row })) { w in
+            CoatEditor(coat: w.row) { body in
+                editing = nil
+                if let body { await change(w.row, body) } else { await remove(w.row) }
+            }
+        }
+    }
+
+    private func reload() async {
+        do { coats = try await store.list("size_test_coat&id=\(testId)"); note = nil }
+        catch let e as ServerError { note = e.retry ? "Can't reach knotwork.ca — coats need a connection" : e.message }
+        catch { self.note = error.localizedDescription }
+    }
+    private func call(_ what: String, _ run: () async throws -> Void) async {
+        busy = true; defer { busy = false }
+        do { try await run(); note = nil; await reload() }
+        catch let e as ServerError { note = e.retry ? "Can't reach knotwork.ca — \(what) didn't happen" : e.message }
+        catch { note = error.localizedDescription }
+    }
+    private func add() async {
+        let now = Date()
+        await call("the new coat") {
+            _ = try await store.server.request("darkroom-api.php?res=size_test_coat&id=\(testId)", method: "POST",
+                                               body: .object(["coated_on": .from(Self.day.string(from: now)), "coated_time": .from(Self.hm.string(from: now))]))
+        }
+    }
+    private func change(_ c: JSON, _ body: [String: JSON]) async {
+        guard let cid = c["id"].int else { return }
+        await call("the change") { _ = try await store.server.request("darkroom-api.php?res=size_test_coat&id=\(testId)&coat=\(cid)", method: "PATCH", body: .object(body)) }
+    }
+    private func remove(_ c: JSON) async {
+        guard let cid = c["id"].int else { return }
+        await call("the removal") { _ = try await store.server.request("darkroom-api.php?res=size_test_coat&id=\(testId)&coat=\(cid)", method: "DELETE") }
+    }
+}
+
+private struct Wrapped2: Identifiable { let row: JSON; var id: Int { row["id"].int ?? 0 } }
+
+/// One coat's day, time (optional) and note. done(body) saves; done(nil) removes the coat.
+private struct CoatEditor: View {
+    let coat: JSON
+    let done: ([String: JSON]?) async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var day = Date()
+    @State private var hasTime = false
+    @State private var time = Date()
+    @State private var text = ""
+    @State private var confirmRemove = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Day", selection: $day, displayedComponents: .date)
+                Toggle("Time known", isOn: $hasTime)
+                if hasTime { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute) }
+                TextField(hint: "Note: direction, tool, amount", text: $text)
+                Section {
+                    Button("Remove this coat", role: .destructive) { confirmRemove = true }
+                }
+            }
+            .navigationTitle("Coat \(coat["coat_no"].int ?? 0)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)
+                        f.dateFormat = "yyyy-MM-dd"; let d = f.string(from: day)
+                        f.dateFormat = "HH:mm"; let t = hasTime ? f.string(from: time) : nil
+                        let n = text.trimmingCharacters(in: .whitespaces)
+                        Task { await done(["coated_on": .from(d), "coated_time": .from(t), "note": .from(n.isEmpty ? nil : String(n.prefix(150)))]) }
+                    }
+                }
+            }
+            .confirmationDialog("Remove this coat?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) { Task { await done(nil) } }
+                Button("Keep it", role: .cancel) {}
+            } message: { Text("The coats after it move up a number.") }
+            .onAppear {
+                day = SizeTestCoats.when(coat) ?? Date()
+                hasTime = coat["coated_time"].string != nil
+                time = day
+                text = coat["note"].string ?? ""
+            }
+        }
     }
 }
