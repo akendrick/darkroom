@@ -216,7 +216,8 @@ struct PigmentsEditor: View {
                 .multilineTextAlignment(.trailing)
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .frame(width: 80)
-                .background(Theme.line.opacity(0.35), in: .rect(cornerRadius: 6))
+                .background(Color.white.opacity(0.7), in: .rect(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.subOnBox.opacity(0.35), lineWidth: 1))
             Text(unit).font(Theme.small)
         }
     }

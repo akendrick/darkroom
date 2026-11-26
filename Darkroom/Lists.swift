@@ -40,6 +40,23 @@ struct ListSpec: Identifiable, Hashable {
     /// A test list (Tests.swift): each row has the tried mark on the left and its main print on the right.
     var testKind: TestKind? = nil
 
+    /// The new-row form's title: "New pigment test", "New chemistry batch", "New kind of print".
+    var newTitle: String {
+        var t = title
+        if t.hasPrefix("Kinds of ") { t = "Kind of " + t.dropFirst(9) }
+        else if t.hasSuffix("ches") { t = String(t.dropLast(2)) }
+        else if t.hasSuffix("s") { t = String(t.dropLast()) }
+        // Lower the first letter only when it starts a plain word (keeps "PVA test").
+        if t.count > 1, t.dropFirst().first?.isLowercase == true { t = t.prefix(1).lowercased() + t.dropFirst() }
+        return "New " + t
+    }
+    /// An existing row's form title, short enough to fit: a variant leads with its code and letter ("PVA1 · B").
+    func editTitle(_ j: JSON) -> String {
+        guard let v = j["variant"].string else { return rowTitle(j) }
+        if let c = j["code"].string { return "\(c) · \(v)" }
+        return "\(v) · \(rowTitle(j))"
+    }
+
     /// The API resource: the id up to any ":" ("material:3" → material).
     var resource: String { String(id.split(separator: ":").first ?? "") }
 
@@ -706,7 +723,8 @@ struct RowForm: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(spec.fields, id: \.key) { f in field(f) }
+                    // "Tried on" only shows once the test is marked tried.
+                    ForEach(spec.fields.filter { $0.key != "tried_on" || values["tried"]?.flag == true }, id: \.key) { f in field(f) }
                     if let error { Text(error).font(Theme.small).foregroundStyle(Theme.red) }
                     if row != nil && spec.archives {
                         Button("Remove from lists", role: .destructive) { confirmArchive = true }
@@ -716,7 +734,7 @@ struct RowForm: View {
                 .padding(18)
             }
             .background(Theme.bg)
-            .navigationTitle(row == nil ? "New" : spec.rowTitle(row!))
+            .navigationTitle(row == nil ? spec.newTitle : spec.editTitle(row!))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -747,7 +765,13 @@ struct RowForm: View {
                 NumberField(value: Binding(get: { values[f.key]?.double }, set: { values[f.key] = .from($0) }), whole: f.kind == .whole)
             }
         case .flag:
-            Toggle(f.label, isOn: Binding(get: { values[f.key]?.flag ?? false }, set: { values[f.key] = .from($0 ? 1 : 0) }))
+            Toggle(f.label, isOn: Binding(get: { values[f.key]?.flag ?? false }, set: { on in
+                values[f.key] = .from(on ? 1 : 0)
+                // A test's tried mark brings its date: today when ticked, none when unticked (as on the web).
+                if f.key == "tried", spec.testKind != nil, spec.fields.contains(where: { $0.key == "tried_on" }) {
+                    if !on { values["tried_on"] = .null } else if values["tried_on"]?.string == nil { values["tried_on"] = .string(fmt(.now, false)) }
+                }
+            }))
                 .font(Theme.body.weight(.semibold)).foregroundStyle(Theme.red).tint(Theme.red)
         case .date, .dateTime:
             let time = f.kind == .dateTime

@@ -70,6 +70,18 @@ enum Theme {
     static let body = Font.system(.body, design: .monospaced)
     static let small = Font.system(.footnote, design: .monospaced)
     static let label = Font.system(.caption, design: .monospaced).weight(.semibold)
+    /// A label in capitals, except units, which keep their case: "PVA (mL)", not "PVA (ML)".
+    static func caps(_ s: String) -> String {
+        let units: Set<String> = ["mL", "g", "mg", "kg", "µL", "cm", "mm", "°C", "°F", "g/mL"]
+        var out = "", word = ""
+        // "." joins a word so "e.g." stays one word and its "g" is not read as grams
+        func flush() { out += units.contains(word.trimmingCharacters(in: ["."])) ? word : word.uppercased(); word = "" }
+        for ch in s {
+            if ch.isLetter || ch == "°" || ch == "µ" || ch == "/" || ch == "." { word.append(ch) } else { flush(); out.append(ch) }
+        }
+        flush()
+        return out
+    }
 }
 
 /// Black with a red border and red text: Back, Skip, Start, Reset.
@@ -182,7 +194,7 @@ struct Field<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label.uppercased()).font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
+            Text(Theme.caps(label)).font(Theme.label.weight(.bold)).tracking(1.5).foregroundStyle(Theme.bright)
             content
                 .font(Theme.body.weight(.bold)).foregroundStyle(.black).tint(.black)
                 .padding(.horizontal, 12).padding(.vertical, 10)
