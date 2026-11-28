@@ -117,7 +117,9 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "carbon_tissue_id", label: "Tissue used", kind: .pick("carbon_tissue")),
             .init(key: "sized_on", label: "Sized", kind: .date),
             .init(key: "coats", label: "Coats", kind: .whole),
-            .init(key: "coat_list", label: "Coats: the day and time each layer went on", kind: .coats),
+            .init(key: "sheet_w_cm", label: "Sheet width, cm", kind: .number),
+            .init(key: "sheet_h_cm", label: "Sheet height, cm", kind: .number),
+            .init(key: "coat_list", label: "Coats: the day, time and mL of each layer", kind: .coats),
             .init(key: "actual_dose", label: "Actual mix / dose used", kind: .text),
             .init(key: "cure_start", label: "Cure start", kind: .date),
             .init(key: "printed_on", label: "Print date", kind: .date),
@@ -1176,7 +1178,7 @@ struct SizeTestCoats: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("Coat \(c["coat_no"].int ?? n + 1)").font(Theme.body.weight(.bold))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text([c["coated_on"].string, c["coated_time"].string ?? "time not recorded"].compactMap { $0 }.joined(separator: "  "))
+                            Text([c["coated_on"].string, c["coated_time"].string ?? "time not recorded", c["ml"].double.map { "\(Amount.format($0)) mL" }].compactMap { $0 }.joined(separator: "  "))
                             if let t = c["note"].string { Text(t).font(Theme.small).foregroundStyle(Theme.subOnBox) }
                         }
                         Spacer()
@@ -1189,6 +1191,9 @@ struct SizeTestCoats: View {
                 .accessibilityHint("Change the day, time or note")
             }
             if coats.isEmpty { Text("No coats recorded yet.").font(Theme.small).foregroundStyle(Theme.subOnBox) }
+            if coats.contains(where: { $0["ml"].double != nil }) {
+                Text("\(Amount.format(coats.compactMap { $0["ml"].double }.reduce(0, +))) mL on the sheet in all").font(Theme.small).foregroundStyle(Theme.subOnBox)
+            }
             Button { Task { await add() } } label: {
                 Label(busy ? "Saving…" : "Add coat (now)", systemImage: "plus").font(Theme.small.weight(.bold))
             }
@@ -1239,11 +1244,21 @@ private struct CoatEditor: View {
     let coat: JSON
     let done: ([String: JSON]?) async -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var day = Date()
-    @State private var hasTime = false
-    @State private var time = Date()
-    @State private var text = ""
+    @State private var day: Date
+    @State private var hasTime: Bool
+    @State private var time: Date
+    @State private var text: String
+    @State private var ml: Double?
     @State private var confirmRemove = false
+
+    init(coat: JSON, done: @escaping ([String: JSON]?) async -> Void) {
+        self.coat = coat; self.done = done
+        let when = SizeTestCoats.when(coat) ?? Date()
+        _day = State(initialValue: when); _time = State(initialValue: when)
+        _hasTime = State(initialValue: coat["coated_time"].string != nil)
+        _text = State(initialValue: coat["note"].string ?? "")
+        _ml = State(initialValue: coat["ml"].double)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1251,7 +1266,8 @@ private struct CoatEditor: View {
                 DatePicker("Day", selection: $day, displayedComponents: .date)
                 Toggle("Time known", isOn: $hasTime)
                 if hasTime { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute) }
-                TextField(hint: "Note: direction, tool, amount", text: $text)
+                HStack { Text("mL on the sheet"); Spacer(); NumberField(value: $ml).multilineTextAlignment(.trailing).frame(maxWidth: 110) }
+                TextField(hint: "Note: direction, tool", text: $text)
                 Section {
                     Button("Remove this coat", role: .destructive) { confirmRemove = true }
                 }
@@ -1266,7 +1282,7 @@ private struct CoatEditor: View {
                         f.dateFormat = "yyyy-MM-dd"; let d = f.string(from: day)
                         f.dateFormat = "HH:mm"; let t = hasTime ? f.string(from: time) : nil
                         let n = text.trimmingCharacters(in: .whitespaces)
-                        Task { await done(["coated_on": .from(d), "coated_time": .from(t), "note": .from(n.isEmpty ? nil : String(n.prefix(150)))]) }
+                        Task { await done(["coated_on": .from(d), "coated_time": .from(t), "ml": .from(ml), "note": .from(n.isEmpty ? nil : String(n.prefix(150)))]) }
                     }
                 }
             }
@@ -1274,12 +1290,6 @@ private struct CoatEditor: View {
                 Button("Remove", role: .destructive) { Task { await done(nil) } }
                 Button("Keep it", role: .cancel) {}
             } message: { Text("The coats after it move up a number.") }
-            .onAppear {
-                day = SizeTestCoats.when(coat) ?? Date()
-                hasTime = coat["coated_time"].string != nil
-                time = day
-                text = coat["note"].string ?? ""
-            }
         }
     }
 }
