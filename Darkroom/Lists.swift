@@ -18,6 +18,8 @@ struct ListSpec: Identifiable, Hashable {
         case photos
         /// A sizing test's coats, each with its day and time; needs the row to be saved first.
         case coats
+        /// The picked lane's recipe card and the source notes for it (read only).
+        case laneNotes
         /// A test's prints from the gallery (kind "size" or "pigment"); needs the row to be saved first.
         case prints(String)
         /// A pigment test's pigments, each with grams and/or mL.
@@ -133,6 +135,7 @@ struct ListSpec: Identifiable, Hashable {
             .init(key: "prints", label: "Prints from the gallery (the outlined one is the main print; press and hold to change)", kind: .prints("size")),
             .init(key: "photos", label: "Other photos of the test", kind: .photos),
             .init(key: "notes", label: "Notes", kind: .notes),
+            .init(key: "lane_directions", label: "Lane directions (for reference)", kind: .laneNotes),
         ], required: ["lane_id", "support_paper_id"], archives: false,
            rowTitle: { [$0["code"].string, $0["lane"].string].compactMap { $0 }.joined(separator: " ") },
            rowSub: { j in
@@ -829,6 +832,8 @@ struct RowForm: View {
                     }
                 }
             }
+        case .laneNotes:
+            Field(label: f.label) { SizeLaneNotes(laneId: values["lane_id"]?.int) }
         case .coats:
             if let id = row?["id"].int {
                 Field(label: f.label) { SizeTestCoats(testId: id) }
@@ -1291,5 +1296,42 @@ private struct CoatEditor: View {
                 Button("Keep it", role: .cancel) {}
             } message: { Text("The coats after it move up a number.") }
         }
+    }
+}
+
+
+/// A sizing lane's recipe card and what the source compendium says about it, for reference
+/// at the bottom of a sizing test. Read from knotwork.ca (needs a connection).
+struct SizeLaneNotes: View {
+    let laneId: Int?
+    @Environment(AppStore.self) private var store
+    @State private var lane: JSON?
+    @State private var note: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let lane {
+                Text([lane["code"].string, lane["name"].string].compactMap { $0 }.joined(separator: " · "))
+                    .font(Theme.body.weight(.bold)).foregroundStyle(Theme.inkOnBox)
+                Text(lane["recipe"].string ?? "No recipe card for this lane.")
+                    .font(Theme.small).foregroundStyle(Theme.inkOnBox).textSelection(.enabled)
+                if let ref = lane["reference"].string {
+                    Text("From the source compendium").font(Theme.small.weight(.bold)).foregroundStyle(Theme.inkOnBox).padding(.top, 4)
+                    Text(ref).font(Theme.small).foregroundStyle(Theme.inkOnBox).textSelection(.enabled)
+                }
+            } else if laneId == nil {
+                Text("Pick a lane to see its directions.").font(Theme.small).foregroundStyle(Theme.subOnBox)
+            }
+            if let note { Text(note).font(Theme.small).foregroundStyle(Theme.subOnBox) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: laneId) { await load() }
+    }
+
+    private func load() async {
+        guard let laneId else { lane = nil; return }
+        do { lane = try await store.list("size_lane").first { $0["id"].int == laneId }; note = lane == nil ? "Lane not found." : nil }
+        catch let e as ServerError { note = e.retry ? "Can't reach knotwork.ca — directions need a connection" : e.message }
+        catch { note = error.localizedDescription }
     }
 }
